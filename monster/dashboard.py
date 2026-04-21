@@ -7,7 +7,7 @@ from monster.options_data import attach_live_pnl
 from monster.store import load_all_states
 
 
-def render_dashboard(config):
+def render_dashboard(config, public_base_url=None):
     states = load_all_states(config)
     states = attach_live_pnl(config, states)
 
@@ -18,8 +18,8 @@ def render_dashboard(config):
     week = _summary_window(alerts, closed_positions, timedelta(days=7))
     leaderboard = _leaderboard(alerts, closed_positions)
     risk = _risk_snapshot(states, alerts, closed_positions)
-    health = _health_snapshot(config, states)
-    tunnel_url = _tunnel_public_url(config)
+    webhook_base_url = _public_webhook_base_url(config, public_base_url)
+    health = _health_snapshot(config, states, webhook_base_url)
 
     total_alerts = sum(int((state.get("stats") or {}).get("alerts_received", 0)) for state in states.values())
     total_sent = sum(int((state.get("stats") or {}).get("discord_sent", 0)) for state in states.values())
@@ -405,7 +405,7 @@ def render_dashboard(config):
             <div class="section-title" style="margin-top:14px;">Health</div>
             <div class="health-row">{health}</div>
             <div class="section-title" style="margin-top:14px;">Webhook</div>
-            <div class="recap-box">{escape((tunnel_url + "/webhook/tradingview") if tunnel_url else "Tunnel offline")}</div>
+            <div class="recap-box">{escape((webhook_base_url + "/webhook/tradingview") if webhook_base_url else "Webhook unavailable")}</div>
           </section>
         </section>
 
@@ -732,7 +732,7 @@ def _risk_snapshot(states, alerts, closed_positions):
     }
 
 
-def _health_snapshot(config, states):
+def _health_snapshot(config, states, webhook_base_url=None):
     chips = []
     recent_alert_times = []
     for state in states.values():
@@ -756,11 +756,11 @@ def _health_snapshot(config, states):
     else:
         chips.append(_chip("Estimated Contracts", "warn"))
 
-    tunnel_url = _tunnel_public_url(config)
-    if tunnel_url:
-        chips.append(_chip("Tunnel Live", "good"))
+    provider = str((config.get("tunnel") or {}).get("provider") or "").lower()
+    if webhook_base_url:
+        chips.append(_chip("Hosted Live" if provider == "render" else "Webhook Live", "good"))
     else:
-        chips.append(_chip("Tunnel Offline", "warn"))
+        chips.append(_chip("Webhook Offline", "warn"))
 
     if staleness is None:
         chips.append(_chip("Waiting On First Alert", "warn"))
@@ -773,7 +773,9 @@ def _health_snapshot(config, states):
     return "".join(chips)
 
 
-def _tunnel_public_url(config):
+def _public_webhook_base_url(config, request_base_url=None):
+    if request_base_url:
+        return request_base_url.rstrip("/")
     tunnel = config.get("tunnel") or {}
     url_file = tunnel.get("public_url_file")
     if url_file and url_file.exists():

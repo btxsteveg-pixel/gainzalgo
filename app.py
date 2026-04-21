@@ -44,7 +44,7 @@ class MonsterHandler(BaseHTTPRequestHandler):
             )
 
         if self.path == "/dashboard":
-            html = render_dashboard(config)
+            html = render_dashboard(config, self._public_base_url())
             encoded = html.encode("utf-8")
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")
@@ -145,6 +145,13 @@ class MonsterHandler(BaseHTTPRequestHandler):
         trade_style = str(payload.get("trade_style", "")).strip().upper()
         if trade_style:
             record_webhook_error(config, trade_style, error, payload)
+
+    def _public_base_url(self):
+        proto = self.headers.get("x-forwarded-proto", "http")
+        host = self.headers.get("x-forwarded-host") or self.headers.get("host")
+        if not host:
+            return None
+        return f"{proto}://{host}"
 
 
 def main():
