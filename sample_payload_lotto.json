@@ -1,0 +1,13 @@
+{
+  "secret": "monster_gainzalgo_2026_webhook_secret_8472",
+  "trade_style": "LOTTO",
+  "symbol": "NVDA",
+  "side": "BUY",
+  "timeframe": "5",
+  "price": 523.15,
+  "confidence": 92,
+  "take_profit": 526.3,
+  "stop_loss": 521.85,
+  "signal_id": "NVDA-LOTTO-5-123456789",
+  "message": "GainzAlgo LOTTO BUY"
+}

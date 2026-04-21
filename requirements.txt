@@ -1,0 +1,1 @@
+# Standard-library app; file included so Render/Railway detect Python cleanly.

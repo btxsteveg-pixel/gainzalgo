@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: gainzalgo-monster
+    runtime: python
+    plan: starter
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: TV_WEBHOOK_HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: data
+      - key: TUNNEL_PROVIDER
+        value: render
