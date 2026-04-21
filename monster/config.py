@@ -1,6 +1,17 @@
 from pathlib import Path
 import os
 
+DEFAULT_ALLOWED_SYMBOLS = [
+    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AVGO", "TSLA", "BRK.B", "JPM",
+    "LLY", "V", "MA", "NFLX", "XOM", "COST", "WMT", "UNH", "ORCL", "HD",
+    "PG", "JNJ", "BAC", "ABBV", "KO", "AMD", "CRM", "MRK", "PEP", "ADBE",
+    "CSCO", "ABT", "TMO", "ACN", "MCD", "DHR", "QCOM", "DIS", "TXN", "INTU",
+    "AMGN", "PFE", "CMCSA", "NEE", "PM", "LIN", "HON", "UNP", "LOW", "INTC",
+    "IBM", "CAT", "GE", "NOW", "BKNG", "GS", "PLTR", "UBER", "PANW", "MU",
+    "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "XLK", "XLF", "XLE", "SMH",
+    "SOXX", "ARKK", "XLI", "XLV", "XLP",
+]
+
 
 def load_config():
     _load_dotenv()
@@ -80,6 +91,9 @@ def _parse_list(value):
 
 def _allowed_symbols(value):
     symbols = _parse_list(value)
+    for symbol in DEFAULT_ALLOWED_SYMBOLS:
+        if symbol not in symbols:
+            symbols.append(symbol)
     # Keep a few liquid crypto tickers available for after-hours webhook testing.
     for symbol in ("BTCUSD", "ETHUSD", "BTCUSDT", "ETHUSDT"):
         if symbol not in symbols:
