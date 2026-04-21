@@ -34,7 +34,7 @@ def load_config():
         },
         "max_recent_alerts": int(os.getenv("MAX_RECENT_ALERTS", "100")),
         "max_signal_ids": int(os.getenv("MAX_SIGNAL_IDS", "5000")),
-        "allowed_symbols": _parse_list(os.getenv("ALLOWED_SYMBOLS", "")),
+        "allowed_symbols": _allowed_symbols(os.getenv("ALLOWED_SYMBOLS", "")),
         "paper_account_size": float(os.getenv("PAPER_ACCOUNT_SIZE", "10000")),
         "styles": {
             "LOTTO": {
@@ -76,3 +76,12 @@ def _load_dotenv():
 
 def _parse_list(value):
     return [item.strip().upper() for item in value.split(",") if item.strip()]
+
+
+def _allowed_symbols(value):
+    symbols = _parse_list(value)
+    # Keep a few liquid crypto tickers available for after-hours webhook testing.
+    for symbol in ("BTCUSD", "ETHUSD", "BTCUSDT", "ETHUSDT"):
+        if symbol not in symbols:
+            symbols.append(symbol)
+    return symbols

@@ -4,6 +4,7 @@ from urllib import error, parse, request
 
 
 USER_AGENT = "GainzAlgoMonster/2.0"
+CRYPTO_TEST_SYMBOLS = {"BTCUSD", "ETHUSD", "BTCUSDT", "ETHUSDT"}
 
 
 def polygon_enabled(config):
@@ -78,6 +79,8 @@ def attach_live_pnl(config, states):
 def resolve_option_contract(config, alert):
     price = alert.get("price")
     if price in (None, 0):
+        return None
+    if str(alert.get("symbol") or "").upper() in CRYPTO_TEST_SYMBOLS:
         return None
 
     style = config["styles"][alert["trade_style"]]
@@ -393,7 +396,7 @@ def _alpaca_get_json(config, path, *, params, api):
         method="GET",
     )
     try:
-        with request.urlopen(req, timeout=10) as response:
+        with request.urlopen(req, timeout=2.5) as response:
             return json.loads(response.read().decode("utf-8"))
     except (error.HTTPError, error.URLError, json.JSONDecodeError, TimeoutError):
         return None
@@ -413,7 +416,7 @@ def _polygon_get_json(config, path, *, params):
         method="GET",
     )
     try:
-        with request.urlopen(req, timeout=10) as response:
+        with request.urlopen(req, timeout=2.5) as response:
             return json.loads(response.read().decode("utf-8"))
     except (error.HTTPError, error.URLError, json.JSONDecodeError, TimeoutError):
         return None
