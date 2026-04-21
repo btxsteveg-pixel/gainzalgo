@@ -22,12 +22,16 @@ config = load_config()
 class MonsterHandler(BaseHTTPRequestHandler):
     server_version = "GainzAlgoMonster/1.0"
 
+    def do_HEAD(self):
+        if self.path in {"/", "/dashboard"}:
+            return self._head_response(200, "text/html; charset=utf-8")
+        if self.path == "/health":
+            return self._head_response(200, "application/json")
+        return self._head_response(404, "application/json")
+
     def do_GET(self):
         if self.path == "/":
-            self.send_response(302)
-            self.send_header("Location", "/dashboard")
-            self.end_headers()
-            return
+            self.path = "/dashboard"
 
         if self.path == "/health":
             return self._json(
@@ -121,6 +125,11 @@ class MonsterHandler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _head_response(self, status, content_type):
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.end_headers()
 
     def _read_form(self):
         length = int(self.headers.get("content-length", "0"))
