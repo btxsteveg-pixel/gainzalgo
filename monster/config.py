@@ -15,6 +15,7 @@ def load_config():
         "secret": os.getenv("TRADINGVIEW_WEBHOOK_SECRET", ""),
         "host": os.getenv("TV_WEBHOOK_HOST", "0.0.0.0"),
         "port": int(os.getenv("PORT") or os.getenv("TV_WEBHOOK_PORT", "8787")),
+        "public_base_url": os.getenv("PUBLIC_BASE_URL", "").strip(),
         "polygon": {
             "api_key": os.getenv("POLYGON_API_KEY", ""),
             "base_url": os.getenv("POLYGON_BASE_URL", "https://api.polygon.io"),

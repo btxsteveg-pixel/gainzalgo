@@ -147,6 +147,9 @@ class MonsterHandler(BaseHTTPRequestHandler):
             record_webhook_error(config, trade_style, error, payload)
 
     def _public_base_url(self):
+        configured = str(config.get("public_base_url") or "").strip()
+        if configured:
+            return configured.rstrip("/")
         proto = self.headers.get("x-forwarded-proto", "http")
         host = self.headers.get("x-forwarded-host") or self.headers.get("host")
         if not host:
