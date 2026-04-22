@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import threading
 from urllib.parse import parse_qs
 
 from monster.config import load_config
@@ -11,12 +12,26 @@ from monster.store import (
     ensure_signal_is_new,
     load_style_state,
     record_webhook_error,
+    reserve_signal,
     save_style_state,
     update_open_position_status,
 )
 
 
 config = load_config()
+STATE_LOCK = threading.Lock()
+
+
+def _process_alert_async(alert):
+    try:
+        trade_plan = build_trade_plan(alert, config)
+        discord_sent = send_discord_alert(config, alert, trade_plan)
+        with STATE_LOCK:
+            state = load_style_state(config, alert["trade_style"])
+            append_alert_log(config, alert, trade_plan, discord_sent, state)
+            save_style_state(config, alert["trade_style"], state)
+    except Exception as exc:
+        record_webhook_error(config, alert["trade_style"], exc, alert)
 
 
 class MonsterHandler(BaseHTTPRequestHandler):
@@ -65,21 +80,21 @@ class MonsterHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             alert = normalize_alert(payload, config)
-            state = load_style_state(config, alert["trade_style"])
-            ensure_signal_is_new(config, alert, state)
-            trade_plan = build_trade_plan(alert, config)
-            discord_sent = send_discord_alert(config, alert, trade_plan)
-            append_alert_log(config, alert, trade_plan, discord_sent, state)
-            save_style_state(config, alert["trade_style"], state)
+            with STATE_LOCK:
+                state = load_style_state(config, alert["trade_style"])
+                ensure_signal_is_new(config, alert, state)
+                reserve_signal(config, alert, state)
+                save_style_state(config, alert["trade_style"], state)
             self._json(
                 202,
                 {
                     "accepted": True,
                     "style": alert["trade_style"],
-                    "discord_sent": discord_sent,
-                    "trade_plan": trade_plan,
+                    "queued": True,
                 },
             )
+            worker = threading.Thread(target=_process_alert_async, args=(alert,), daemon=True)
+            worker.start()
         except PermissionError as exc:
             self._record_webhook_error(payload, exc)
             self._json(401, {"accepted": False, "error": str(exc)})

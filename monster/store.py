@@ -102,6 +102,12 @@ def ensure_signal_is_new(config, alert, state):
     _ensure_cooldown_passed(config, alert, state)
 
 
+def reserve_signal(config, alert, state):
+    state["signal_ids"] = (state.get("signal_ids", []) + [alert["signal_id"]])[-config["max_signal_ids"] :]
+    state["last_symbol_alerts"][alert["symbol"]] = alert["received_at"]
+    state["last_updated"] = alert["received_at"]
+
+
 def append_alert_log(config, alert, trade_plan, discord_sent, state):
     event = {
         "time": alert["received_at"],
@@ -139,10 +145,8 @@ def append_alert_log(config, alert, trade_plan, discord_sent, state):
     if discord_sent:
         stats["discord_sent"] += 1
 
-    signal_ids = (state.get("signal_ids", []) + [alert["signal_id"]])[-config["max_signal_ids"] :]
-    state["signal_ids"] = signal_ids
-    state["last_symbol_alerts"][alert["symbol"]] = alert["received_at"]
-    state["last_updated"] = alert["received_at"]
+    if alert["signal_id"] not in state.get("signal_ids", []):
+        reserve_signal(config, alert, state)
     state["last_webhook_error"] = None
     state["last_alert"] = event
     state["recent_alerts"] = (state.get("recent_alerts", []) + [event])[-config["max_recent_alerts"] :]
