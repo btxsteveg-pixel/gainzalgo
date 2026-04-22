@@ -30,10 +30,13 @@ The app now supports the hosted `PORT` environment variable automatically.
    - `ALPACA_SECRET_KEY`
    - `ALPACA_OPTIONS_FEED=opra`
    - `TV_WEBHOOK_HOST=0.0.0.0`
-   - `DATA_DIR=data`
+   - `DATA_DIR=/var/data/gainzalgo`
    - `LOTTO_COOLDOWN_SECONDS`
    - `SWING_COOLDOWN_SECONDS`
    - `ALLOWED_SYMBOLS`
+
+5. Add a Render persistent disk mounted at `/var/data`.
+   This is what keeps dashboard state and history from resetting on redeploy/restart.
 
 After deploy, Render gives you a stable public base URL like:
 
