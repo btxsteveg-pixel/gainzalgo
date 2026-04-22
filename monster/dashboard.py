@@ -14,12 +14,15 @@ def render_dashboard(config, public_base_url=None):
     alerts = _collect_alerts(states)
     closed_positions = _collect_closed_positions(states)
     latest_alert = alerts[-1] if alerts else None
+    last_sent_alert = _latest_discord_alert(alerts)
+    latest_error = _latest_webhook_error(states)
     today = _summary_window(alerts, closed_positions, timedelta(days=1))
     week = _summary_window(alerts, closed_positions, timedelta(days=7))
     leaderboard = _leaderboard(alerts, closed_positions)
     risk = _risk_snapshot(states, alerts, closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     health = _health_snapshot(config, states, webhook_base_url)
+    focus_list = _focus_list(alerts, leaderboard)
 
     total_alerts = sum(int((state.get("stats") or {}).get("alerts_received", 0)) for state in states.values())
     total_sent = sum(int((state.get("stats") or {}).get("discord_sent", 0)) for state in states.values())
@@ -172,10 +175,10 @@ def render_dashboard(config, public_base_url=None):
           gap: 10px;
         }}
         .hero-grid {{
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
         }}
         .summary {{
-          grid-template-columns: repeat(2, minmax(120px, 1fr));
+          grid-template-columns: repeat(3, minmax(120px, 1fr));
         }}
         .summary span, .stat span, .grid-stat span, .table-head span {{
           display: block;
@@ -391,14 +394,14 @@ def render_dashboard(config, public_base_url=None):
           <div class="ticker-strip">
             <div class="ticker-pill">LOTTO • red zone</div>
             <div class="ticker-pill">SWING • control pace</div>
-            <div class="ticker-pill">Alpaca • live options</div>
-            <div class="ticker-pill">Discord • live feed</div>
+            <div class="ticker-pill">{escape(_route_label(webhook_base_url))}</div>
+            <div class="ticker-pill">{escape(focus_list)}</div>
           </div>
         </section>
 
         <section class="hero">
           <section class="hero-card">
-            <div class="hero-title">Last Alert</div>
+            <div class="hero-title">Last Confirmed Signal</div>
             {hero}
           </section>
           <section class="panel">
@@ -408,11 +411,15 @@ def render_dashboard(config, public_base_url=None):
               <div><span>Discord Sent</span><strong>{total_sent}</strong></div>
               <div><span>Net Closed P&amp;L</span><strong class="{_pnl_class(total_closed_pnl)}">{escape(_fmt_money(total_closed_pnl))}</strong></div>
               <div><span>Last Seen</span><strong>{escape(_short_time(last_seen))}</strong></div>
+              <div><span>Last Discord</span><strong>{escape(_short_time((last_sent_alert or {}).get("time")))}</strong></div>
+              <div><span>Last Reject</span><strong>{escape(_short_time((latest_error or {}).get("time")))}</strong></div>
             </div>
             <div class="section-title" style="margin-top:14px;">Desk Status</div>
-            <div class="desk-status">{_desk_status(webhook_base_url, latest_alert, total_sent)}</div>
+            <div class="desk-status">{_desk_status(webhook_base_url, latest_alert, total_sent, last_sent_alert, latest_error)}</div>
             <div class="section-title" style="margin-top:14px;">Health</div>
             <div class="health-row">{health}</div>
+            <div class="section-title" style="margin-top:14px;">Signal Flow</div>
+            <div class="recap-box">{escape(_signal_flow_text(last_sent_alert, latest_error))}</div>
             <div class="section-title" style="margin-top:14px;">Webhook</div>
             <div class="recap-box">{escape((webhook_base_url + "/webhook/tradingview") if webhook_base_url else "Webhook unavailable")}</div>
           </section>
@@ -474,7 +481,7 @@ def render_dashboard(config, public_base_url=None):
           </section>
           <section class="panel">
             <div class="section-title">Before The Next Trade</div>
-            <div class="recap-box">1. Tape in sync with signal?\n2. Current price still near entry?\n3. Stop and target worth the risk?\n4. Contract match readable and liquid?\n5. No revenge trade energy?</div>
+            <div class="recap-box">1. Tape in sync with the lane?\n2. Current price still near the callout?\n3. Contract sits where you actually want to play it?\n4. Stop and target still make sense?\n5. If this loses, will the next trade still be clean?</div>
           </section>
         </section>
       </main>
@@ -590,7 +597,7 @@ def _style_card(style, state):
         {controls}
       </div>
 
-      <div class="section-title">Recent Alerts</div>
+      <div class="section-title">Recent Tape</div>
       <div class="table alert-table">
         <div class="table-head">
           <span>Signal</span><span>Bias</span><span>Price</span><span>Conf</span>
@@ -610,20 +617,30 @@ def _hero(latest_alert):
     contract = _fmt_contract(latest_alert.get("option_symbol"))
     price = _fmt(latest_alert.get("price"))
     target = _fmt(latest_alert.get("tp1"))
+    second_target = _fmt(latest_alert.get("tp2"))
     stop = _fmt(latest_alert.get("stop"))
     confidence = _fmt(latest_alert.get("confidence"))
+    timeframe = latest_alert.get("timeframe") or "N/A"
+    target_expiry = latest_alert.get("target_expiry") or "N/A"
+    entry_premium = _fmt_money(latest_alert.get("contract_price"))
+    reward_to_risk = _fmt(latest_alert.get("reward_to_risk"))
     direction_chip = f"<span class='tag {'buy' if side == 'BUY' else 'sell'}'>{escape(side)}</span>"
     return f"""
-      <div class="hero-title">{escape(style)} Alert</div>
+      <div class="hero-title">{escape(style)} Lane</div>
       <div class="hero-symbol">{escape(str(latest_alert.get('symbol') or 'N/A'))}</div>
       <div class="hero-meta">
         {direction_chip}
+        <span class="chip">{escape(_fmt_timeframe(timeframe))}</span>
         <span class="chip">{escape(contract)}</span>
         <span class="chip">{escape(_short_time(latest_alert.get('time')))}</span>
       </div>
       <div class="hero-grid">
         <div><span>Current Price</span><strong>{escape(price)}</strong></div>
+        <div><span>Entry Premium</span><strong>{escape(entry_premium)}</strong></div>
+        <div><span>Target Expiry</span><strong>{escape(str(target_expiry))}</strong></div>
+        <div><span>Reward / Risk</span><strong>{escape(reward_to_risk)}</strong></div>
         <div><span>Underlying TP1</span><strong>{escape(target)}</strong></div>
+        <div><span>Underlying TP2</span><strong>{escape(second_target)}</strong></div>
         <div><span>Stop</span><strong>{escape(stop)}</strong></div>
         <div><span>Confidence</span><strong>{escape(confidence)}%</strong></div>
         <div><span>Source</span><strong>{escape(str(latest_alert.get('pricing_source') or 'Estimated').title())}</strong></div>
@@ -782,16 +799,20 @@ def _health_snapshot(config, states, webhook_base_url=None):
     return "".join(chips)
 
 
-def _desk_status(webhook_base_url, latest_alert, total_sent):
+def _desk_status(webhook_base_url, latest_alert, total_sent, last_sent_alert, latest_error):
     latest_symbol = escape(str((latest_alert or {}).get("symbol") or "Waiting"))
     latest_lane = escape(str((latest_alert or {}).get("trade_style") or "No lane yet"))
-    route_label = "Render Hosted" if webhook_base_url and "onrender.com" in webhook_base_url else "Local Desk"
+    route_label = _route_label(webhook_base_url)
     discord_label = "Live feed armed" if total_sent else "Feed waiting on first hit"
+    last_sent_label = _short_time((last_sent_alert or {}).get("time"))
+    last_error_label = _short_time((latest_error or {}).get("time"))
     pills = [
         f"<span class='status-pill'>Route <strong>{escape(route_label)}</strong></span>",
         f"<span class='status-pill'>Last Symbol <strong>{latest_symbol}</strong></span>",
         f"<span class='status-pill'>Lane <strong>{latest_lane}</strong></span>",
         f"<span class='status-pill'>Discord <strong>{escape(discord_label)}</strong></span>",
+        f"<span class='status-pill'>Last Hit <strong>{escape(last_sent_label)}</strong></span>",
+        f"<span class='status-pill'>Last Reject <strong>{escape(last_error_label)}</strong></span>",
     ]
     return "".join(pills)
 
@@ -820,9 +841,9 @@ def _recap_lines(today, week, latest_alert, risk):
     latest_side = latest_alert.get("side") if latest_alert else "N/A"
     latest_style = latest_alert.get("trade_style") if latest_alert else "N/A"
     return (
-        f"Today: {today['alerts']} alerts, {today['closed']} closed, { _fmt_money(today['pnl']) }.\n"
-        f"Week: {week['alerts']} alerts, {week['closed']} closed, { _fmt_money(week['pnl']) }.\n"
-        f"Last signal: {latest_style} {latest_symbol} {latest_side}.\n"
+        f"Today: {today['alerts']} alerts landed, {today['closed']} trades closed, { _fmt_money(today['pnl']) } realized.\n"
+        f"Week: {week['alerts']} alerts, {week['closed']} closed trades, { _fmt_money(week['pnl']) } on the board.\n"
+        f"Latest confirmed lane: {latest_style} {latest_symbol} {latest_side}.\n"
         f"Desk note: {risk['note']}"
     )
 
@@ -859,6 +880,71 @@ def _leaderboard_row(item):
 
 def _chip(label, tone):
     return f"<span class='chip {tone}'>{escape(label)}</span>"
+
+
+def _latest_discord_alert(alerts):
+    sent_alerts = [alert for alert in alerts if alert.get("discord_sent")]
+    return sent_alerts[-1] if sent_alerts else None
+
+
+def _latest_webhook_error(states):
+    latest = None
+    latest_time = None
+    for state in states.values():
+        item = state.get("last_webhook_error") or {}
+        if not item.get("message"):
+            continue
+        parsed = _parse_iso(item.get("time"))
+        if latest is None or (parsed and (latest_time is None or parsed > latest_time)):
+            latest = item
+            latest_time = parsed
+    return latest
+
+
+def _focus_list(alerts, leaderboard):
+    recent_symbols = []
+    seen = set()
+    for alert in reversed(alerts[-12:]):
+        symbol = alert.get("symbol")
+        if not symbol or symbol in seen:
+            continue
+        recent_symbols.append(symbol)
+        seen.add(symbol)
+        if len(recent_symbols) == 4:
+            break
+    if not recent_symbols:
+        recent_symbols = [item["symbol"] for item in leaderboard[:4]]
+    if not recent_symbols:
+        return "Watch • waiting on tape"
+    return "Watch • " + " / ".join(recent_symbols)
+
+
+def _route_label(webhook_base_url):
+    return "Render Hosted" if webhook_base_url and "onrender.com" in webhook_base_url else "Local Desk"
+
+
+def _signal_flow_text(last_sent_alert, latest_error):
+    if last_sent_alert and latest_error:
+        return (
+            f"Last Discord send: {last_sent_alert.get('symbol', 'N/A')} "
+            f"{last_sent_alert.get('side', 'N/A')} at {_short_time(last_sent_alert.get('time'))}.\n"
+            f"Last rejection: {latest_error.get('symbol', 'N/A')} "
+            f"at {_short_time(latest_error.get('time'))}.\n"
+            f"Reason: {latest_error.get('message', 'N/A')}"
+        )
+    if last_sent_alert:
+        return (
+            f"Last Discord send: {last_sent_alert.get('symbol', 'N/A')} "
+            f"{last_sent_alert.get('side', 'N/A')} at {_short_time(last_sent_alert.get('time'))}.\n"
+            "Flow looks clean right now."
+        )
+    if latest_error:
+        return (
+            f"Last rejection: {latest_error.get('symbol', 'N/A')} "
+            f"at {_short_time(latest_error.get('time'))}.\n"
+            f"Reason: {latest_error.get('message', 'N/A')}"
+        )
+    return "No Discord sends or rejections yet. The desk is waiting on the first clean hit."
 
 
 def _loss_streak(closed_positions):
@@ -966,6 +1052,26 @@ def _fmt_pct(value):
         return f"{float(value):.2f}%"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _fmt_timeframe(value):
+    if value in (None, ""):
+        return "No TF"
+    text = str(value).strip()
+    mapping = {
+        "1": "1m",
+        "3": "3m",
+        "5": "5m",
+        "15": "15m",
+        "30": "30m",
+        "45": "45m",
+        "60": "1h",
+        "120": "2h",
+        "240": "4h",
+        "D": "1D",
+        "W": "1W",
+    }
+    return mapping.get(text, text)
 
 
 def _short_time(value):
