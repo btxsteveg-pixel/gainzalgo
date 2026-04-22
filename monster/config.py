@@ -38,6 +38,11 @@ def load_config():
             "trading_base_url": os.getenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets"),
             "options_feed": os.getenv("ALPACA_OPTIONS_FEED", "indicative"),
         },
+        "discord": {
+            "timeout_seconds": float(os.getenv("DISCORD_TIMEOUT_SECONDS", "6")),
+            "max_retries": int(os.getenv("DISCORD_MAX_RETRIES", "2")),
+            "retry_backoff_seconds": float(os.getenv("DISCORD_RETRY_BACKOFF_SECONDS", "0.75")),
+        },
         "tunnel": {
             "provider": os.getenv("TUNNEL_PROVIDER", "cloudflared"),
             "public_url_file": base_dir / os.getenv("TUNNEL_PUBLIC_URL_FILE", "desktop_app/tunnel_url.txt"),

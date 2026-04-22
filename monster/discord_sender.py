@@ -1,4 +1,5 @@
 import json
+import time
 from urllib import request, error
 
 
@@ -14,6 +15,7 @@ def send_discord_alert(config, alert, trade_plan):
     webhook = style_config["discord_webhook"]
     if not webhook:
         return False
+    discord_config = config.get("discord") or {}
 
     is_buy = alert["side"] == "BUY"
     side_emoji = "🟢" if is_buy else "🔴"
@@ -71,11 +73,12 @@ def send_discord_alert(config, alert, trade_plan):
         },
         method="POST",
     )
-    try:
-        with request.urlopen(req, timeout=10) as response:
-            return 200 <= response.status < 300
-    except (error.URLError, error.HTTPError):
-        return False
+    return _post_with_retry(
+        req,
+        timeout_seconds=float(discord_config.get("timeout_seconds", 6)),
+        max_retries=int(discord_config.get("max_retries", 2)),
+        retry_backoff_seconds=float(discord_config.get("retry_backoff_seconds", 0.75)),
+    )
 
 
 def _field(name, value, inline):
@@ -166,3 +169,25 @@ def _fmt_timestamp(value):
     if "T" in text:
         text = text.replace("T", " ")
     return text[:16]
+
+
+def _post_with_retry(req, timeout_seconds, max_retries, retry_backoff_seconds):
+    attempts = max(max_retries, 0) + 1
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with request.urlopen(req, timeout=timeout_seconds) as response:
+                if 200 <= response.status < 300:
+                    return True
+                last_error = RuntimeError(f"discord webhook returned {response.status}")
+        except error.HTTPError as exc:
+            last_error = exc
+            if 400 <= exc.code < 500 and exc.code != 429:
+                break
+        except error.URLError as exc:
+            last_error = exc
+
+        if attempt < attempts - 1:
+            time.sleep(retry_backoff_seconds * (attempt + 1))
+
+    return False
