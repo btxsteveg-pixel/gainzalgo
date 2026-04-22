@@ -117,7 +117,7 @@ def resolve_option_contract(config, alert):
         if not contracts:
             return None
 
-        selected = _pick_contract(contracts, price, target_expiry)
+        selected = _pick_contract(contracts, price, target_expiry, contract_type)
         if not selected:
             return None
 
@@ -162,7 +162,7 @@ def resolve_polygon_contract(
     if not contracts:
         return None
 
-    selected = _pick_polygon_contract(contracts, underlying_price, target_expiry)
+    selected = _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type)
     if not selected:
         return None
 
@@ -294,29 +294,51 @@ def fetch_option_snapshots(config, option_symbols):
     return {}
 
 
-def _pick_contract(contracts, underlying_price, target_expiry):
+def _pick_contract(contracts, underlying_price, target_expiry, contract_type):
     def score(contract):
         strike = _safe_float(contract.get("strike_price")) or underlying_price
         expiry = _parse_date(contract.get("expiration_date")) or target_expiry
         strike_gap = abs(strike - underlying_price)
         expiry_gap = abs((expiry - target_expiry).days)
         tradable_penalty = 0 if contract.get("tradable", True) else 1000
-        return (tradable_penalty, expiry_gap, strike_gap, strike)
+        otm_penalty = _otm_penalty(strike, underlying_price, contract_type)
+        directional_gap = _directional_strike_gap(strike, underlying_price, contract_type)
+        return (tradable_penalty, otm_penalty, expiry_gap, directional_gap, strike_gap, strike)
 
     ranked = sorted(contracts, key=score)
     return ranked[0] if ranked else None
 
 
-def _pick_polygon_contract(contracts, underlying_price, target_expiry):
+def _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type):
     def score(contract):
         strike = _safe_float(contract.get("strike_price")) or underlying_price
         expiry = _parse_date(contract.get("expiration_date")) or target_expiry
         strike_gap = abs(strike - underlying_price)
         expiry_gap = abs((expiry - target_expiry).days)
-        return (expiry_gap, strike_gap, strike)
+        otm_penalty = _otm_penalty(strike, underlying_price, contract_type)
+        directional_gap = _directional_strike_gap(strike, underlying_price, contract_type)
+        return (otm_penalty, expiry_gap, directional_gap, strike_gap, strike)
 
     ranked = sorted(contracts, key=score)
     return ranked[0] if ranked else None
+
+
+def _otm_penalty(strike, underlying_price, contract_type):
+    if contract_type == "call":
+        return 0 if strike >= underlying_price else 1
+    if contract_type == "put":
+        return 0 if strike <= underlying_price else 1
+    return 0
+
+
+def _directional_strike_gap(strike, underlying_price, contract_type):
+    if contract_type == "call":
+        gap = strike - underlying_price
+    elif contract_type == "put":
+        gap = underlying_price - strike
+    else:
+        gap = abs(strike - underlying_price)
+    return gap if gap >= 0 else abs(gap) + 1000
 
 
 def _extract_contract_price(snapshot, provider):
