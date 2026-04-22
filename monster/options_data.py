@@ -85,6 +85,7 @@ def resolve_option_contract(config, alert):
 
     style = config["styles"][alert["trade_style"]]
     contract_type = "call" if alert["side"] == "BUY" else "put"
+    strike_anchor = _strike_anchor(alert, price, contract_type)
     expiry_floor, expiry_ceiling = _expiry_window(alert["received_at"], style["dte_min"], style["dte_max"])
     strike_low, strike_high = _strike_window(price)
 
@@ -100,6 +101,7 @@ def resolve_option_contract(config, alert):
             strike_low=strike_low,
             strike_high=strike_high,
             target_expiry=target_expiry,
+            strike_anchor=strike_anchor,
         )
         if resolved:
             return resolved
@@ -117,7 +119,7 @@ def resolve_option_contract(config, alert):
         if not contracts:
             return None
 
-        selected = _pick_contract(contracts, price, target_expiry, contract_type)
+        selected = _pick_contract(contracts, price, target_expiry, contract_type, strike_anchor)
         if not selected:
             return None
 
@@ -149,6 +151,7 @@ def resolve_polygon_contract(
     strike_low,
     strike_high,
     target_expiry,
+    strike_anchor,
 ):
     contracts = fetch_polygon_contracts(
         config,
@@ -162,7 +165,7 @@ def resolve_polygon_contract(
     if not contracts:
         return None
 
-    selected = _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type)
+    selected = _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type, strike_anchor)
     if not selected:
         return None
 
@@ -294,7 +297,7 @@ def fetch_option_snapshots(config, option_symbols):
     return {}
 
 
-def _pick_contract(contracts, underlying_price, target_expiry, contract_type):
+def _pick_contract(contracts, underlying_price, target_expiry, contract_type, strike_anchor):
     def score(contract):
         strike = _safe_float(contract.get("strike_price")) or underlying_price
         expiry = _parse_date(contract.get("expiration_date")) or target_expiry
@@ -302,22 +305,24 @@ def _pick_contract(contracts, underlying_price, target_expiry, contract_type):
         expiry_gap = abs((expiry - target_expiry).days)
         tradable_penalty = 0 if contract.get("tradable", True) else 1000
         otm_penalty = _otm_penalty(strike, underlying_price, contract_type)
+        anchor_gap = _anchor_gap(strike, strike_anchor)
         directional_gap = _directional_strike_gap(strike, underlying_price, contract_type)
-        return (tradable_penalty, otm_penalty, expiry_gap, directional_gap, strike_gap, strike)
+        return (tradable_penalty, otm_penalty, anchor_gap, expiry_gap, directional_gap, strike_gap, strike)
 
     ranked = sorted(contracts, key=score)
     return ranked[0] if ranked else None
 
 
-def _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type):
+def _pick_polygon_contract(contracts, underlying_price, target_expiry, contract_type, strike_anchor):
     def score(contract):
         strike = _safe_float(contract.get("strike_price")) or underlying_price
         expiry = _parse_date(contract.get("expiration_date")) or target_expiry
         strike_gap = abs(strike - underlying_price)
         expiry_gap = abs((expiry - target_expiry).days)
         otm_penalty = _otm_penalty(strike, underlying_price, contract_type)
+        anchor_gap = _anchor_gap(strike, strike_anchor)
         directional_gap = _directional_strike_gap(strike, underlying_price, contract_type)
-        return (otm_penalty, expiry_gap, directional_gap, strike_gap, strike)
+        return (otm_penalty, anchor_gap, expiry_gap, directional_gap, strike_gap, strike)
 
     ranked = sorted(contracts, key=score)
     return ranked[0] if ranked else None
@@ -339,6 +344,24 @@ def _directional_strike_gap(strike, underlying_price, contract_type):
     else:
         gap = abs(strike - underlying_price)
     return gap if gap >= 0 else abs(gap) + 1000
+
+
+def _strike_anchor(alert, underlying_price, contract_type):
+    target_price = _safe_float(alert.get("take_profit"))
+    minimum_offset = 5.0
+    if contract_type == "call":
+        baseline = underlying_price + minimum_offset
+        return max(target_price, baseline) if target_price is not None else baseline
+    if contract_type == "put":
+        baseline = max(underlying_price - minimum_offset, 0.01)
+        return min(target_price, baseline) if target_price is not None else baseline
+    return target_price if target_price is not None else underlying_price
+
+
+def _anchor_gap(strike, strike_anchor):
+    if strike_anchor in (None, ""):
+        return 0
+    return abs(strike - strike_anchor)
 
 
 def _extract_contract_price(snapshot, provider):
