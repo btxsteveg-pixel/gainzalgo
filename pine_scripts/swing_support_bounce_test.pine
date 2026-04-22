@@ -1,0 +1,116 @@
+//@version=5
+// GainzAlgo - Swing Support Bounce Test
+
+indicator("GainzAlgo Swing Support Bounce Test", overlay=true)
+
+pivot_length = input.int(8, "Pivot Length", minval=2, maxval=20)
+support_zone_pct = input.float(0.35, "Zone Width %", minval=0.10, maxval=2.0, step=0.05)
+tp1_rr = input.float(1.5, "TP1 Reward/Risk", minval=0.5, maxval=5.0, step=0.25)
+tp2_rr = input.float(2.5, "TP2 Reward/Risk", minval=1.0, maxval=8.0, step=0.25)
+use_volume_filter = input.bool(true, "Use Volume Confirmation")
+volume_mult = input.float(1.10, "Volume vs Avg", minval=0.8, maxval=3.0, step=0.05)
+trend_tf = input.timeframe("60", "Higher Timeframe")
+min_signal_gap = input.int(12, "Min Bars Between Signals", minval=1, maxval=100)
+tv_secret = input.string("CHANGE_ME", "Webhook Secret")
+
+vol_avg = ta.sma(volume, 20)
+volume_ok = not use_volume_filter or volume > vol_avg * volume_mult
+
+[trend_close, trend_ema_fast, trend_ema_slow] = request.security(syminfo.tickerid, trend_tf, [close, ta.ema(close, 20), ta.ema(close, 50)])
+
+bull_trend = trend_close > trend_ema_fast and trend_ema_fast > trend_ema_slow
+bear_trend = trend_close < trend_ema_fast and trend_ema_fast < trend_ema_slow
+
+pivot_low = ta.pivotlow(low, pivot_length, pivot_length)
+pivot_high = ta.pivothigh(high, pivot_length, pivot_length)
+
+var float support_level = na
+var float resistance_level = na
+var line support_line = na
+var line support_top_line = na
+var line support_bottom_line = na
+var line resistance_line = na
+var line resistance_top_line = na
+var line resistance_bottom_line = na
+var label support_tag = na
+var label resistance_tag = na
+
+if not na(pivot_low)
+    support_level := pivot_low
+if not na(pivot_high)
+    resistance_level := pivot_high
+
+support_zone = support_level * support_zone_pct / 100.0
+resistance_zone = resistance_level * support_zone_pct / 100.0
+
+if not na(pivot_low)
+    pivot_bar = bar_index - pivot_length
+    line.delete(support_line)
+    line.delete(support_top_line)
+    line.delete(support_bottom_line)
+    label.delete(support_tag)
+    support_line := line.new(pivot_bar, support_level, bar_index + 1, support_level, extend=extend.right, color=color.new(color.lime, 0), width=2)
+    support_top_line := line.new(pivot_bar, support_level + support_zone, bar_index + 1, support_level + support_zone, extend=extend.right, color=color.new(color.lime, 65), width=1)
+    support_bottom_line := line.new(pivot_bar, support_level - support_zone, bar_index + 1, support_level - support_zone, extend=extend.right, color=color.new(color.lime, 65), width=1)
+    support_tag := label.new(pivot_bar, support_level, "SUPPORT", style=label.style_label_left, color=color.new(color.lime, 80), textcolor=color.white, size=size.tiny)
+
+if not na(pivot_high)
+    pivot_bar = bar_index - pivot_length
+    line.delete(resistance_line)
+    line.delete(resistance_top_line)
+    line.delete(resistance_bottom_line)
+    label.delete(resistance_tag)
+    resistance_line := line.new(pivot_bar, resistance_level, bar_index + 1, resistance_level, extend=extend.right, color=color.new(color.red, 0), width=2)
+    resistance_top_line := line.new(pivot_bar, resistance_level + resistance_zone, bar_index + 1, resistance_level + resistance_zone, extend=extend.right, color=color.new(color.red, 65), width=1)
+    resistance_bottom_line := line.new(pivot_bar, resistance_level - resistance_zone, bar_index + 1, resistance_level - resistance_zone, extend=extend.right, color=color.new(color.red, 65), width=1)
+    resistance_tag := label.new(pivot_bar, resistance_level, "RESIST", style=label.style_label_left, color=color.new(color.red, 80), textcolor=color.white, size=size.tiny)
+
+near_support = not na(support_level) and low <= support_level + support_zone and close >= support_level
+near_resistance = not na(resistance_level) and high >= resistance_level - resistance_zone and close <= resistance_level
+
+bullish_reclaim = close > open and close > close[1] and low > low[1]
+bearish_reject = close < open and close < close[1] and high < high[1]
+
+support_bounce = near_support and bullish_reclaim and bull_trend and volume_ok
+resistance_reject = near_resistance and bearish_reject and bear_trend and volume_ok
+
+var int last_signal_bar = -1000
+signal_spacing_ok = bar_index - last_signal_bar >= min_signal_gap
+
+risk_buy = not na(support_level) ? close - (support_level - support_zone) : na
+risk_sell = not na(resistance_level) ? (resistance_level + resistance_zone) - close : na
+
+buy_condition = support_bounce and signal_spacing_ok and risk_buy > 0
+sell_condition = resistance_reject and signal_spacing_ok and risk_sell > 0
+
+buy_stop = support_level - support_zone
+sell_stop = resistance_level + resistance_zone
+buy_tp1 = close + risk_buy * tp1_rr
+buy_tp2 = close + risk_buy * tp2_rr
+sell_tp1 = close - risk_sell * tp1_rr
+sell_tp2 = close - risk_sell * tp2_rr
+
+system_confidence = buy_condition or sell_condition ? (bull_trend or bear_trend ? (volume_ok ? 82.0 : 72.0) : 68.0) : 60.0
+
+if buy_condition
+    last_signal_bar := bar_index
+
+if sell_condition
+    last_signal_bar := bar_index
+
+plotshape(barstate.isconfirmed and near_support, title="Support Test", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny)
+plotshape(barstate.isconfirmed and near_resistance, title="Resistance Test", style=shape.circle, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny)
+
+if barstate.isconfirmed and buy_condition
+    label.new(bar_index, low, "SWING BUY\nBounce Confirmed", style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.white)
+
+if barstate.isconfirmed and sell_condition
+    label.new(bar_index, high, "SWING SELL\nRejection Confirmed", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+
+trade_style = "SWING"
+
+if buy_condition
+    alert('{"secret":"' + tv_secret + '","trade_style":"' + trade_style + '","symbol":"' + syminfo.ticker + '","timeframe":"' + timeframe.period + '","side":"BUY","price":' + str.tostring(close) + ',"confidence":' + str.tostring(system_confidence) + ',"take_profit":' + str.tostring(buy_tp1) + ',"stop_loss":' + str.tostring(buy_stop) + ',"signal_id":"' + syminfo.ticker + '-SWING-' + timeframe.period + '-' + str.tostring(time) + '","message":"GainzAlgo SWING SUPPORT BOUNCE BUY"}', alert.freq_once_per_bar_close)
+
+if sell_condition
+    alert('{"secret":"' + tv_secret + '","trade_style":"' + trade_style + '","symbol":"' + syminfo.ticker + '","timeframe":"' + timeframe.period + '","side":"SELL","price":' + str.tostring(close) + ',"confidence":' + str.tostring(system_confidence) + ',"take_profit":' + str.tostring(sell_tp1) + ',"stop_loss":' + str.tostring(sell_stop) + ',"signal_id":"' + syminfo.ticker + '-SWING-' + timeframe.period + '-' + str.tostring(time) + '","message":"GainzAlgo SWING RESISTANCE REJECT SELL"}', alert.freq_once_per_bar_close)

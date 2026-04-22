@@ -23,24 +23,29 @@ def send_discord_alert(config, alert, trade_plan):
     contract_emoji = "📞" if trade_plan["contract_side"] == "CALL" else "📉"
     direction_label = "BULLISH" if is_buy else "BEARISH"
     contract_label = _fmt_contract_label(trade_plan.get("option_symbol")) if trade_plan.get("option_symbol") else None
-    description_bits = [f"{side_emoji} **{direction_label}**  {contract_emoji} **{trade_plan['contract_side']}**"]
-    if contract_label and contract_label != "N/A":
-        description_bits.append(f"**{contract_label}**")
-    if trade_plan.get("entry_type"):
-        description_bits.append(f"`{trade_plan['entry_type']}`")
+    timeframe_label = _fmt_timeframe(alert.get("timeframe"))
+    setup_label = _setup_label(alert, trade_plan)
+    description_bits = [f"{side_emoji} **{direction_label}** • {contract_emoji} **{trade_plan['contract_side']}**"]
+    if timeframe_label != "N/A":
+        description_bits.append(f"Timeframe: **{timeframe_label}**")
+    if setup_label:
+        description_bits.append(f"Setup: **{setup_label}**")
 
     fields = [
-        _field("Current Price", f"{alert['symbol']} {_fmt(alert['price'])}", True),
-        _field("Contract", contract_label or "N/A", True),
+        _field("Underlying", f"{alert['symbol']} @ {_fmt(alert['price'])}", True),
+        _field("Option Contract", contract_label or "N/A", True),
         _field("Entry Premium", _fmt_money(trade_plan.get("contract_price")), True),
-        _field("Expiry", trade_plan.get("target_expiry"), True),
+        _field("Target Expiry", trade_plan.get("target_expiry"), True),
         _field("Underlying TP1", _fmt(trade_plan["tp1"]), True),
-        _field("Stop", _fmt(trade_plan["stop"]), True),
+        _field("Underlying Stop", _fmt(trade_plan["stop"]), True),
         _field("Confidence", f"{_fmt(alert['confidence'])}%", True),
+        _field("Reward / Risk", _fmt(trade_plan.get("reward_to_risk")), True),
         _field("Data", _fmt_source(trade_plan.get("pricing_source"), trade_plan.get("contract_price_source")), True),
     ]
     if trade_plan.get("tp2") not in (None, ""):
         fields.append(_field("Underlying TP2", _fmt(trade_plan["tp2"]), True))
+    if trade_plan.get("max_contracts") not in (None, ""):
+        fields.append(_field("Max Contracts", _fmt_int(trade_plan.get("max_contracts")), True))
     if trade_plan.get("delta") not in (None, ""):
         fields.append(_field("Delta", _fmt(trade_plan.get("delta")), True))
     if trade_plan.get("open_interest") not in (None, ""):
@@ -51,7 +56,7 @@ def send_discord_alert(config, alert, trade_plan):
         "embeds": [
             {
                 "author": {"name": f"GainzAlgo Monster • {alert['trade_style']} Lane"},
-                "title": f"{style_emoji} {alert['trade_style']} | {direction_label} | {alert['symbol']}",
+                "title": f"{style_emoji} {alert['trade_style']} {trade_plan['contract_side']} • {alert['symbol']}",
                 "description": "\n".join(description_bits),
                 "fields": fields,
                 "color": 0x00E676 if alert["side"] == "BUY" else 0xFF1744,
@@ -128,12 +133,36 @@ def _fmt_contract_label(option_symbol):
 def _footer_text(alert, trade_plan):
     parts = [_fmt_source(trade_plan.get("pricing_source"), trade_plan.get("contract_price_source"))]
     if alert.get("timeframe"):
-        parts.append(f"{alert['timeframe']}m" if str(alert["timeframe"]).isdigit() else str(alert["timeframe"]))
+        parts.append(_fmt_timeframe(alert["timeframe"]))
     if alert.get("received_at"):
         parts.append(_fmt_timestamp(alert["received_at"]))
     if trade_plan.get("contract_price") in (None, "") and trade_plan.get("option_symbol"):
         parts.append("premium pending data plan")
     return " • ".join(parts)
+
+
+def _fmt_timeframe(value):
+    if value in (None, ""):
+        return "N/A"
+    text = str(value)
+    return f"{text}m" if text.isdigit() else text
+
+
+def _setup_label(alert, trade_plan):
+    message = str(alert.get("message") or "").strip()
+    cleaned = (
+        message.replace("GainzAlgo", "")
+        .replace("LOTTO", "")
+        .replace("SWING", "")
+        .replace("BUY", "")
+        .replace("SELL", "")
+        .strip(" -")
+    )
+    if cleaned:
+        return cleaned.title()
+    if trade_plan.get("entry_type"):
+        return str(trade_plan["entry_type"]).replace("_", " ").title()
+    return None
 
 
 def _fmt(value):
