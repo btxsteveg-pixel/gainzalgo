@@ -106,12 +106,12 @@ def render_dashboard(config, public_base_url=None):
           color: #c8aab0;
           font-size: 14px;
         }}
-        .ticker-strip, .health-row {{
+        .ticker-strip, .health-row, .desk-status {{
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
         }}
-        .ticker-pill, .chip {{
+        .ticker-pill, .chip, .status-pill {{
           padding: 6px 10px;
           border-radius: 8px;
           background: rgba(28, 28, 33, 0.98);
@@ -122,6 +122,13 @@ def render_dashboard(config, public_base_url=None):
         .chip.good {{ color: #8cffb0; border-color: rgba(118,255,163,.22); }}
         .chip.warn {{ color: #ffd37e; border-color: rgba(255,211,126,.22); }}
         .chip.bad {{ color: #ff9aa7; border-color: rgba(255,154,167,.22); }}
+        .status-pill {{
+          color: #f6d9de;
+        }}
+        .status-pill strong {{
+          color: #ffffff;
+          font-weight: 700;
+        }}
         .hero {{
           display: grid;
           grid-template-columns: 1.5fr 1fr;
@@ -402,6 +409,8 @@ def render_dashboard(config, public_base_url=None):
               <div><span>Net Closed P&amp;L</span><strong class="{_pnl_class(total_closed_pnl)}">{escape(_fmt_money(total_closed_pnl))}</strong></div>
               <div><span>Last Seen</span><strong>{escape(_short_time(last_seen))}</strong></div>
             </div>
+            <div class="section-title" style="margin-top:14px;">Desk Status</div>
+            <div class="desk-status">{_desk_status(webhook_base_url, latest_alert, total_sent)}</div>
             <div class="section-title" style="margin-top:14px;">Health</div>
             <div class="health-row">{health}</div>
             <div class="section-title" style="margin-top:14px;">Webhook</div>
@@ -571,7 +580,7 @@ def _style_card(style, state):
           <div><span>Side</span><strong>{position_side}</strong></div>
           <div><span>Entry</span><strong>{position_entry}</strong></div>
           <div><span>Stop</span><strong>{position_stop}</strong></div>
-          <div><span>TP1</span><strong>{position_tp1}</strong></div>
+          <div><span>Underlying TP1</span><strong>{position_tp1}</strong></div>
           <div><span>Option Idea</span><strong>{option_symbol}</strong></div>
           <div><span>Entry Premium</span><strong>{option_entry}</strong></div>
           <div><span>Live Premium</span><strong>{option_mark}</strong></div>
@@ -614,7 +623,7 @@ def _hero(latest_alert):
       </div>
       <div class="hero-grid">
         <div><span>Current Price</span><strong>{escape(price)}</strong></div>
-        <div><span>TP1</span><strong>{escape(target)}</strong></div>
+        <div><span>Underlying TP1</span><strong>{escape(target)}</strong></div>
         <div><span>Stop</span><strong>{escape(stop)}</strong></div>
         <div><span>Confidence</span><strong>{escape(confidence)}%</strong></div>
         <div><span>Source</span><strong>{escape(str(latest_alert.get('pricing_source') or 'Estimated').title())}</strong></div>
@@ -771,6 +780,20 @@ def _health_snapshot(config, states, webhook_base_url=None):
     else:
         chips.append(_chip("Standby • no recent alerts", "warn"))
     return "".join(chips)
+
+
+def _desk_status(webhook_base_url, latest_alert, total_sent):
+    latest_symbol = escape(str((latest_alert or {}).get("symbol") or "Waiting"))
+    latest_lane = escape(str((latest_alert or {}).get("trade_style") or "No lane yet"))
+    route_label = "Render Hosted" if webhook_base_url and "onrender.com" in webhook_base_url else "Local Desk"
+    discord_label = "Live feed armed" if total_sent else "Feed waiting on first hit"
+    pills = [
+        f"<span class='status-pill'>Route <strong>{escape(route_label)}</strong></span>",
+        f"<span class='status-pill'>Last Symbol <strong>{latest_symbol}</strong></span>",
+        f"<span class='status-pill'>Lane <strong>{latest_lane}</strong></span>",
+        f"<span class='status-pill'>Discord <strong>{escape(discord_label)}</strong></span>",
+    ]
+    return "".join(pills)
 
 
 def _public_webhook_base_url(config, request_base_url=None):
