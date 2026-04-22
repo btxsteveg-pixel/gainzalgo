@@ -164,21 +164,12 @@ def load_all_states(config):
 def _update_paper_position(state, event):
     open_position = state.get("open_position")
     if open_position and open_position.get("symbol") == event["symbol"] and open_position.get("side") != event["side"]:
-        closed = dict(open_position)
-        closed["closed_at"] = event["time"]
-        closed["close_price"] = event["price"]
-        closed["close_contract_price"] = event.get("contract_price")
-        closed["close_signal"] = event["signal_id"]
-        closed["close_reason"] = "OPPOSITE SIGNAL"
-        closed["pnl"] = _paper_pnl(open_position, event["price"])
-        closed["option_pnl"] = _option_pnl(open_position, event.get("contract_price"))
-        state["closed_positions"] = (state.get("closed_positions", []) + [closed])[-100:]
-        decision_pnl = closed["option_pnl"] if closed["option_pnl"] is not None else closed["pnl"]
-        if decision_pnl is not None:
-            if decision_pnl > 0:
-                state["stats"]["wins"] += 1
-            else:
-                state["stats"]["losses"] += 1
+        _archive_position(state, open_position, event, "OPPOSITE SIGNAL")
+        open_position = None
+    elif open_position and open_position.get("symbol") != event["symbol"]:
+        # Each style only tracks one active position. A fresh symbol should rotate the
+        # previous idea out instead of mutating the old position with the new symbol's price.
+        _archive_position(state, open_position, event, "NEW SYMBOL ALERT")
         open_position = None
 
     if open_position is None:
@@ -206,6 +197,25 @@ def _update_paper_position(state, event):
     else:
         open_position["current_underlying_price"] = event["price"]
         state["open_position"] = open_position
+
+
+def _archive_position(state, open_position, event, reason):
+    closed = dict(open_position)
+    closed["closed_at"] = event["time"]
+    closed["close_price"] = event["price"]
+    closed["close_contract_price"] = event.get("contract_price")
+    closed["close_signal"] = event["signal_id"]
+    closed["close_reason"] = reason
+    closed["pnl"] = _paper_pnl(open_position, event["price"])
+    closed["option_pnl"] = _option_pnl(open_position, event.get("contract_price"))
+    state["closed_positions"] = (state.get("closed_positions", []) + [closed])[-100:]
+
+    decision_pnl = closed["option_pnl"] if closed["option_pnl"] is not None else closed["pnl"]
+    if decision_pnl is not None:
+        if decision_pnl > 0:
+            state["stats"]["wins"] += 1
+        else:
+            state["stats"]["losses"] += 1
 
 
 def _paper_pnl(open_position, close_price):
