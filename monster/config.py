@@ -57,7 +57,7 @@ def load_config():
                 "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL_LOTTO", ""),
                 "state_file": data_dir / os.getenv("STATE_FILE_LOTTO", "lotto_state.json"),
                 "trade_log": data_dir / os.getenv("TRADE_LOG_LOTTO", "lotto_alerts.csv"),
-                "min_confidence": float(os.getenv("LOTTO_MIN_CONFIDENCE", "80")),
+                "min_confidence": min(float(os.getenv("LOTTO_MIN_CONFIDENCE", "70")), 70.0),
                 "dte_min": int(os.getenv("DEFAULT_LOTTO_DTE_MIN", "0")),
                 "dte_max": int(os.getenv("DEFAULT_LOTTO_DTE_MAX", "7")),
                 "risk_pct": float(os.getenv("LOTTO_RISK_PCT", "0.5")),
