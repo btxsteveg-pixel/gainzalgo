@@ -50,6 +50,7 @@ def load_config():
         },
         "max_recent_alerts": int(os.getenv("MAX_RECENT_ALERTS", "100")),
         "max_signal_ids": int(os.getenv("MAX_SIGNAL_IDS", "5000")),
+        "max_contract_premium": _optional_float(os.getenv("MAX_CONTRACT_PREMIUM", "")),
         "allowed_symbols": _allowed_symbols(os.getenv("ALLOWED_SYMBOLS", "")),
         "paper_account_size": float(os.getenv("PAPER_ACCOUNT_SIZE", "10000")),
         # Paper execution engine — set PAPER_TRADING_ENABLED=false to disable.
@@ -124,6 +125,16 @@ def _load_dotenv():
 
 def _parse_list(value):
     return [item.strip().upper() for item in value.split(",") if item.strip()]
+
+
+def _optional_float(value):
+    try:
+        stripped = str(value).strip()
+        if not stripped:
+            return None
+        return float(stripped)
+    except (TypeError, ValueError):
+        return None
 
 
 def _allowed_symbols(value):

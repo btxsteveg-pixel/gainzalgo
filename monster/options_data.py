@@ -98,6 +98,7 @@ def resolve_option_contract(config, alert):
     option_symbols = [contract.get("symbol") for contract in contracts if contract.get("symbol")]
     snapshots = fetch_option_snapshots(config, option_symbols)
     selected = _pick_contract(
+        config,
         contracts,
         snapshots,
         price,
@@ -304,6 +305,7 @@ def fetch_stock_snapshots(config, symbols):
 
 
 def _pick_contract(
+    config,
     contracts,
     snapshots,
     underlying_price,
@@ -316,6 +318,7 @@ def _pick_contract(
 ):
     if trade_style == "SWING":
         return _pick_swing_contract(
+            config,
             contracts,
             snapshots,
             underlying_price,
@@ -405,6 +408,8 @@ def _pick_contract(
             # else: greeks present but zero passed — keep liquidity-filtered list
             # so picker always returns something rather than falling to estimated.
 
+        contracts = _apply_contract_premium_cap(config, contracts, snapshots)
+
     def score(contract):
         strike = _safe_float(contract.get("strike_price")) or underlying_price
         expiry = _parse_date(contract.get("expiration_date")) or target_expiry
@@ -422,7 +427,8 @@ def _pick_contract(
     return ranked[0] if ranked else None
 
 
-def _pick_swing_contract(contracts, snapshots, underlying_price, target_expiry, contract_type, strike_anchor, style, confidence):
+def _pick_swing_contract(config, contracts, snapshots, underlying_price, target_expiry, contract_type, strike_anchor, style, confidence):
+    contracts = _apply_contract_premium_cap(config, contracts, snapshots)
     delta_min = style.get("delta_min", 0.40)
     delta_target_max = style.get("delta_target_max", 0.55)
     delta_absolute_max = style.get("delta_absolute_max", 0.65)
@@ -770,6 +776,24 @@ def _extract_contract_price(snapshot, provider):
     if trade_price not in (None, 0):
         return round(trade_price, 4), "trade"
     return None, None
+
+
+def _apply_contract_premium_cap(config, contracts, snapshots):
+    max_contract_premium = _safe_float((config or {}).get("max_contract_premium"))
+    if max_contract_premium in (None, 0):
+        return contracts
+
+    filtered = []
+    for contract in contracts:
+        snapshot = snapshots.get(contract.get("symbol")) or {}
+        metrics = _extract_contract_liquidity(snapshot, contract, provider="alpaca")
+        contract_price = metrics.get("contract_price")
+        # Only reject when Alpaca returns real price data. Missing price leaves
+        # the contract eligible instead of failing closed on incomplete data.
+        if contract_price is not None and contract_price > max_contract_premium:
+            continue
+        filtered.append(contract)
+    return filtered
 
 
 def _extract_contract_liquidity(snapshot, contract, provider):
