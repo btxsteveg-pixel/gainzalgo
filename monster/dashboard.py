@@ -5,6 +5,13 @@ import re
 
 from monster.options_data import attach_live_pnl
 from monster.store import load_all_states
+try:
+    from monster.paper_trader import get_paper_summary
+    _PAPER_TRADER_AVAILABLE = True
+except Exception:
+    _PAPER_TRADER_AVAILABLE = False
+    def get_paper_summary(config):
+        return {"open_positions": [], "recent_closed": [], "stats": {}}
 
 
 def render_dashboard(config, public_base_url=None):
@@ -42,6 +49,10 @@ def render_dashboard(config, public_base_url=None):
     recap_lines = _recap_lines(today, week, latest_alert, risk)
 
     hero = _hero(latest_alert)
+
+    # Paper trading summary
+    paper = get_paper_summary(config) if _PAPER_TRADER_AVAILABLE else {"open_positions": [], "recent_closed": [], "stats": {}}
+    paper_section = _paper_section(paper)
 
     return f"""
     <!doctype html>
@@ -484,6 +495,8 @@ def render_dashboard(config, public_base_url=None):
             <div class="recap-box">1. Tape in sync with the lane?\n2. Current price still near the callout?\n3. Contract sits where you actually want to play it?\n4. Stop and target still make sense?\n5. If this loses, will the next trade still be clean?</div>
           </section>
         </section>
+
+        {paper_section}
       </main>
     </body>
     </html>
@@ -775,9 +788,7 @@ def _health_snapshot(config, states, webhook_base_url=None):
 
     chips.append(_chip("App Online", "good"))
     chips.append(_chip("Discord Ready", "good"))
-    if config.get("polygon", {}).get("api_key"):
-        chips.append(_chip("Polygon Connected", "good"))
-    elif config.get("alpaca", {}).get("api_key"):
+    if config.get("alpaca", {}).get("api_key"):
         chips.append(_chip("Alpaca Live", "good"))
     else:
         chips.append(_chip("Estimated Contracts", "warn"))
@@ -1120,3 +1131,189 @@ def _status_class(status):
     if status in {"ENTERED", "TRIMMED"}:
         return "warn"
     return ""
+
+
+def _paper_section(paper):
+    """Render the full paper trading P&L panel for the dashboard."""
+    stats   = paper.get("stats") or {}
+    opens   = paper.get("open_positions") or []
+    closed  = paper.get("recent_closed") or []
+
+    total_pnl   = stats.get("total_pnl", 0.0)
+    lotto_pnl   = stats.get("lotto_pnl", 0.0)
+    swing_pnl   = stats.get("swing_pnl", 0.0)
+    total_trades= stats.get("total_trades", 0)
+    wins        = stats.get("wins", 0)
+    losses      = stats.get("losses", 0)
+    win_rate    = stats.get("win_rate", 0)
+    lotto_trades= stats.get("lotto_trades", 0)
+    swing_trades= stats.get("swing_trades", 0)
+
+    def pnl_color(v):
+        return "#00e676" if v >= 0 else "#ff1744"
+
+    def fmt_pnl(v):
+        sign = "+" if v >= 0 else ""
+        return f"{sign}${v:.2f}"
+
+    # ── Stat cards ───────────────────────────────────────────────────────
+    stat_cards = f"""
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+          <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Total P&L</div>
+            <div style="font-size:20px;font-weight:600;color:{pnl_color(total_pnl)}">{fmt_pnl(total_pnl)}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Win Rate</div>
+            <div style="font-size:20px;font-weight:600;color:{'#00e676' if win_rate>=50 else '#ff9800'}">{win_rate}%</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Trades</div>
+            <div style="font-size:20px;font-weight:600">{wins}W / {losses}L</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Lotto P&L</div>
+            <div style="font-size:20px;font-weight:600;color:{pnl_color(lotto_pnl)}">{fmt_pnl(lotto_pnl)}</div>
+            <div style="font-size:10px;color:#666;margin-top:2px">{lotto_trades} trades</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Swing P&L</div>
+            <div style="font-size:20px;font-weight:600;color:{pnl_color(swing_pnl)}">{fmt_pnl(swing_pnl)}</div>
+            <div style="font-size:10px;color:#666;margin-top:2px">{swing_trades} trades</div>
+          </div>
+        </div>"""
+
+    # ── Open positions ────────────────────────────────────────────────────
+    if opens:
+        open_rows = ""
+        for p in opens:
+            sym         = escape(str(p.get("symbol", "")))
+            side        = escape(str(p.get("side", "")))
+            style       = escape(str(p.get("style", "")))
+            contracts   = p.get("contracts", 1)
+            entry       = p.get("entry_contract_price") or 0
+            current     = p.get("current_contract_price") or entry
+            unreal      = p.get("unrealized_pnl", 0.0) or 0.0
+            opt_sym     = escape(str(p.get("option_symbol", "—")))
+            tp          = p.get("tp")
+            sl          = p.get("sl")
+            entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
+            underlying  = p.get("current_underlying_price")
+            und_str     = f"${underlying:.2f}" if underlying else "—"
+
+            open_rows += f"""
+              <div style="display:grid;grid-template-columns:80px 60px 60px 1fr 70px 70px 80px 80px 80px;
+                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
+                          font-size:12px;align-items:center">
+                <span style="font-weight:600">{sym}</span>
+                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
+                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
+                      font-size:10px;font-weight:600">{side}</span>
+                <span style="background:rgba(255,183,39,0.12);color:#ffb727;padding:2px 6px;
+                      border-radius:4px;font-size:10px">{style}</span>
+                <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}</span>
+                <span>${entry:.2f}</span>
+                <span>{und_str}</span>
+                <span>TP: {f"${float(tp):.2f}" if tp else "—"} / SL: {f"${float(sl):.2f}" if sl else "—"}</span>
+                <span style="color:{pnl_color(unreal)};font-weight:600">{fmt_pnl(unreal)}</span>
+                <span style="color:#666">{entered}</span>
+              </div>"""
+
+        open_section = f"""
+          <div style="margin-bottom:16px">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+              Open Positions ({len(opens)})
+            </div>
+            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
+              <div style="display:grid;grid-template-columns:80px 60px 60px 1fr 70px 70px 80px 80px 80px;
+                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
+                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
+                <span>Symbol</span><span>Side</span><span>Style</span><span>Contract</span>
+                <span>Entry $</span><span>Underlying</span><span>TP / SL</span>
+                <span>Unreal P&L</span><span>Entered</span>
+              </div>
+              {open_rows}
+            </div>
+          </div>"""
+    else:
+        open_section = """
+          <div style="margin-bottom:16px">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Open Positions</div>
+            <div style="color:#555;font-size:13px;padding:16px 0">No open paper positions</div>
+          </div>"""
+
+    # ── Recent closed ─────────────────────────────────────────────────────
+    if closed:
+        closed_rows = ""
+        for p in closed:
+            sym     = escape(str(p.get("symbol", "")))
+            side    = escape(str(p.get("side", "")))
+            style   = escape(str(p.get("style", "")))
+            entry   = p.get("entry_contract_price") or 0
+            exit_px = p.get("exit_contract_price")
+            rpnl    = p.get("realized_pnl", 0.0) or 0.0
+            reason  = escape(str(p.get("exit_reason", "—")))
+            closed_at = str(p.get("closed_at", ""))[:16].replace("T", " ")
+
+            closed_rows += f"""
+              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 70px 1fr 90px 100px;
+                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
+                          font-size:12px;align-items:center">
+                <span style="font-weight:600">{sym}</span>
+                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
+                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;
+                      border-radius:4px;font-size:10px;font-weight:600">{side}</span>
+                <span style="background:rgba(255,183,39,0.12);color:#ffb727;padding:2px 6px;
+                      border-radius:4px;font-size:10px">{style}</span>
+                <span>${entry:.2f}</span>
+                <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
+                <span style="color:#aaa;font-size:11px">{reason}</span>
+                <span style="color:{pnl_color(rpnl)};font-weight:600">{fmt_pnl(rpnl)}</span>
+                <span style="color:#555;font-size:11px">{closed_at}</span>
+              </div>"""
+
+        closed_section = f"""
+          <div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+              Recent Closed ({len(closed)})
+            </div>
+            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
+              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 70px 1fr 90px 100px;
+                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
+                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
+                <span>Symbol</span><span>Side</span><span>Style</span>
+                <span>Entry</span><span>Exit</span><span>Reason</span>
+                <span>P&L</span><span>Closed</span>
+              </div>
+              {closed_rows}
+            </div>
+          </div>"""
+    else:
+        closed_section = """
+          <div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Recent Closed</div>
+            <div style="color:#555;font-size:13px;padding:16px 0">Paper trades will appear here after they close</div>
+          </div>"""
+
+    empty_note = "" if total_trades > 0 else """
+        <div style="text-align:center;padding:20px 0;color:#555;font-size:13px">
+          Paper trading is live. Results will appear here after Monday's first signal fires.
+        </div>"""
+
+    return f"""
+        <section style="margin-top:20px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <div style="width:8px;height:8px;border-radius:50%;background:#ffb727;
+                        animation:pulse 2s infinite"></div>
+            <div style="font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+                        color:#ffb727">Paper Trading Engine</div>
+            <div style="font-size:11px;color:#555;margin-left:4px">Alpaca Paper · Auto TP/SL · Force close 3:55 PM ET</div>
+          </div>
+          <div style="background:rgba(255,183,39,0.04);border:1px solid rgba(255,183,39,0.18);
+                      border-radius:10px;padding:18px 20px">
+            {empty_note}
+            {stat_cards}
+            {open_section}
+            {closed_section}
+          </div>
+        </section>"""
