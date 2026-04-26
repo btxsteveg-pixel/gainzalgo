@@ -1,7 +1,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from monster.config import load_config
 from monster.dashboard import render_dashboard
@@ -61,25 +61,41 @@ def _process_alert_async(alert):
 class MonsterHandler(BaseHTTPRequestHandler):
     server_version = "GainzAlgoMonster/1.0"
 
+    def _route_path(self):
+        raw_path = str(self.path or "/")
+        parsed = urlparse(raw_path)
+        route_path = parsed.path or raw_path.split("?", 1)[0]
+        # Some proxies/clients may send an absolute-form URI or host-prefixed path.
+        # Normalize to the slash-prefixed route segment so route matching is stable.
+        if route_path and not route_path.startswith("/"):
+            slash_at = route_path.find("/")
+            route_path = route_path[slash_at:] if slash_at >= 0 else f"/{route_path}"
+        return route_path or "/"
+
     def do_HEAD(self):
-        if self.path in {"/", "/dashboard"}:
+        route_path = self._route_path()
+        if route_path in {"/", "/dashboard"}:
             return self._head_response(200, "text/html; charset=utf-8")
-        if self.path == "/health":
+        if route_path == "/health":
+            return self._head_response(200, "application/json")
+        if route_path == "/flow-scan":
             return self._head_response(200, "application/json")
         return self._head_response(404, "application/json")
 
     def do_GET(self):
-        if self.path == "/":
+        route_path = self._route_path()
+        if route_path == "/":
             self.path = "/dashboard"
+            route_path = "/dashboard"
 
         # ── Options Flow Scan ──────────────────────────────────────────────────
         # Trigger: GET /flow-scan?secret=<FLOW_SCAN_SECRET>
         # Returns 202 immediately, runs scan in background thread.
         # Set up UptimeRobot or cron to hit this every 5-10 min during market hours.
-        if self.path.startswith("/flow-scan"):
+        if route_path == "/flow-scan":
             return self._handle_flow_scan()
 
-        if self.path == "/health":
+        if route_path == "/health":
             return self._json(
                 200,
                 {
@@ -89,7 +105,7 @@ class MonsterHandler(BaseHTTPRequestHandler):
                 },
             )
 
-        if self.path == "/dashboard":
+        if route_path == "/dashboard":
             html = render_dashboard(config, self._public_base_url())
             encoded = html.encode("utf-8")
             self.send_response(200)
