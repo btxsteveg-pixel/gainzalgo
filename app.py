@@ -22,6 +22,19 @@ config = load_config()
 STATE_LOCK = threading.Lock()
 
 
+def _run_flow_scan_async():
+    """Background thread target for /flow-scan endpoint."""
+    try:
+        from monster.options_flow import run_flow_scan
+        import logging
+        logging.getLogger(__name__).info("Options flow scan started")
+        results = run_flow_scan()
+        logging.getLogger(__name__).info(f"Options flow scan complete — {len(results)} alerts posted")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(f"Options flow scan error: {exc}")
+
+
 def _process_alert_async(alert):
     try:
         trade_plan = build_trade_plan(alert, config)
@@ -58,6 +71,13 @@ class MonsterHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             self.path = "/dashboard"
+
+        # ── Options Flow Scan ──────────────────────────────────────────────────
+        # Trigger: GET /flow-scan?secret=<FLOW_SCAN_SECRET>
+        # Returns 202 immediately, runs scan in background thread.
+        # Set up UptimeRobot or cron to hit this every 5-10 min during market hours.
+        if self.path.startswith("/flow-scan"):
+            return self._handle_flow_scan()
 
         if self.path == "/health":
             return self._json(
@@ -115,6 +135,26 @@ class MonsterHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._record_webhook_error(payload, exc)
             self._json(500, {"accepted": False, "error": str(exc)})
+
+    def _handle_flow_scan(self):
+        flow_cfg = config.get("flow", {})
+
+        scan_secret = flow_cfg.get("scan_secret", "")
+        if scan_secret:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            provided = qs.get("secret", [""])[0]
+            if provided != scan_secret:
+                return self._json(401, {"error": "invalid scan secret"})
+
+        if not flow_cfg.get("enabled", True):
+            return self._json(200, {"ok": False, "reason": "flow scanner disabled"})
+
+        from monster.options_flow import WATCHLIST
+
+        self._json(202, {"accepted": True, "scanning": True, "symbols": len(WATCHLIST)})
+        worker = threading.Thread(target=_run_flow_scan_async, daemon=True)
+        worker.start()
 
     def _handle_position_action(self):
         try:

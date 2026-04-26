@@ -57,6 +57,20 @@ def load_config():
         # Uses the same Alpaca keys but hits paper-api.alpaca.markets.
         # Make sure ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets in .env.
         "paper_trading_enabled": os.getenv("PAPER_TRADING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+        # ── Options Flow Scanner (Tastytrade) ──────────────────────────────────
+        # Scans top-20 symbols for unusual options activity ($1M+ premium).
+        # Calls → FLOW_DISCORD_WEBHOOK_BULL, Puts → FLOW_DISCORD_WEBHOOK_BEAR
+        # Trigger: GET /flow-scan?secret=<FLOW_SCAN_SECRET>
+        "flow": {
+            "tastytrade_username":  os.getenv("TASTYTRADE_USERNAME", ""),
+            "tastytrade_password":  os.getenv("TASTYTRADE_PASSWORD", ""),
+            "bull_webhook":         os.getenv("FLOW_DISCORD_WEBHOOK_BULL", ""),
+            "bear_webhook":         os.getenv("FLOW_DISCORD_WEBHOOK_BEAR", ""),
+            "min_premium":          float(os.getenv("FLOW_MIN_PREMIUM", "1000000")),
+            "max_dte":              int(os.getenv("FLOW_MAX_DTE", "60")),
+            "scan_secret":          os.getenv("FLOW_SCAN_SECRET", ""),
+            "enabled":              os.getenv("FLOW_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+        },
         "styles": {
             "LOTTO": {
                 "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL_LOTTO", ""),
