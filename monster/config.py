@@ -52,6 +52,10 @@ def load_config():
         "max_signal_ids": int(os.getenv("MAX_SIGNAL_IDS", "5000")),
         "allowed_symbols": _allowed_symbols(os.getenv("ALLOWED_SYMBOLS", "")),
         "paper_account_size": float(os.getenv("PAPER_ACCOUNT_SIZE", "10000")),
+        # Paper execution engine — set PAPER_TRADING_ENABLED=false to disable.
+        # Uses the same Alpaca keys but hits paper-api.alpaca.markets.
+        # Make sure ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets in .env.
+        "paper_trading_enabled": os.getenv("PAPER_TRADING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
         "styles": {
             "LOTTO": {
                 "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL_LOTTO", ""),

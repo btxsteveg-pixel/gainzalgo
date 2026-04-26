@@ -26,6 +26,17 @@ def _process_alert_async(alert):
     try:
         trade_plan = build_trade_plan(alert, config)
         discord_sent = send_discord_alert(config, alert, trade_plan)
+
+        # Paper execution — fires after Discord so a Discord failure never
+        # blocks the paper order, and a paper failure never blocks Discord.
+        if config.get("paper_trading_enabled", True):
+            try:
+                from monster.paper_trader import execute_paper_trade
+                execute_paper_trade(config, alert, trade_plan)
+            except Exception as paper_exc:
+                import logging
+                logging.getLogger(__name__).error(f"Paper trade error: {paper_exc}")
+
         with STATE_LOCK:
             state = load_style_state(config, alert["trade_style"])
             append_alert_log(config, alert, trade_plan, discord_sent, state)
@@ -173,6 +184,15 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    # Start paper trading monitor if enabled
+    if config.get("paper_trading_enabled", True):
+        try:
+            from monster.paper_trader import ensure_monitor_running
+            ensure_monitor_running(config)
+            print("Paper trading monitor started")
+        except Exception as exc:
+            print(f"Paper monitor startup warning: {exc}")
+
     address = (config["host"], config["port"])
     print(f"GainzAlgo Monster running on http://{config['host']}:{config['port']}")
     print(f"Dashboard: http://localhost:{config['port']}/dashboard")
