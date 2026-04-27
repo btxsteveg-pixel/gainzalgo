@@ -37,6 +37,7 @@ MONITOR_INTERVAL_SECONDS = 60       # how often the monitor thread polls
 FORCE_CLOSE_HOUR_ET = 15            # 3 PM hour in ET
 FORCE_CLOSE_MINUTE_ET = 55          # 3:55 PM ET force-close trigger
 MAX_CLOSED_HISTORY = 200            # cap closed positions in state file
+DASHBOARD_HIDDEN_SYMBOLS = {"BTCUSD", "BTCUSDT", "ETHUSD", "ETHUSDT"}
 
 # Singleton monitor thread — one per process
 _monitor_thread = None
@@ -564,24 +565,69 @@ def get_paper_summary(config):
     """
     try:
         state = _load_state(config)
-        stats = state.get("stats", {})
-        total = stats.get("total_trades", 0)
-        wins = stats.get("wins", 0)
+        open_positions = [
+            position for position in state.get("open_positions", [])
+            if _include_dashboard_paper_position(position)
+        ]
+        closed_positions = [
+            position for position in state.get("closed_positions", [])
+            if _include_dashboard_paper_position(position)
+        ]
+        stats = _dashboard_paper_stats(closed_positions)
         return {
-            "open_positions": state.get("open_positions", []),
-            "recent_closed": state.get("closed_positions", [])[-10:][::-1],
-            "stats": {
-                "total_trades": total,
-                "wins": wins,
-                "losses": stats.get("losses", 0),
-                "win_rate": round(wins / total * 100) if total else 0,
-                "total_pnl": stats.get("total_pnl", 0.0),
-                "lotto_pnl": stats.get("lotto_pnl", 0.0),
-                "swing_pnl": stats.get("swing_pnl", 0.0),
-                "lotto_trades": stats.get("lotto_trades", 0),
-                "swing_trades": stats.get("swing_trades", 0),
-            },
+            "open_positions": open_positions,
+            "recent_closed": closed_positions[-10:][::-1],
+            "stats": stats,
         }
     except Exception as exc:
         logger.error(f"Paper summary error: {exc}")
         return {"open_positions": [], "recent_closed": [], "stats": {}}
+
+
+def _include_dashboard_paper_position(position):
+    if not position:
+        return False
+    symbol = str(position.get("symbol") or "").strip().upper()
+    if not symbol or symbol in DASHBOARD_HIDDEN_SYMBOLS:
+        return False
+    if not position.get("option_symbol"):
+        return False
+    if position.get("entry_contract_price") in (None, "", 0):
+        return False
+    return True
+
+
+def _dashboard_paper_stats(closed_positions):
+    stats = {
+        "total_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0,
+        "total_pnl": 0.0,
+        "lotto_pnl": 0.0,
+        "swing_pnl": 0.0,
+        "lotto_trades": 0,
+        "swing_trades": 0,
+    }
+
+    for position in closed_positions:
+        pnl = float(position.get("realized_pnl") or 0.0)
+        style = str(position.get("style") or "LOTTO").upper()
+
+        stats["total_trades"] += 1
+        if pnl > 0:
+            stats["wins"] += 1
+        else:
+            stats["losses"] += 1
+
+        stats["total_pnl"] = round(stats["total_pnl"] + pnl, 2)
+        if style == "LOTTO":
+            stats["lotto_pnl"] = round(stats["lotto_pnl"] + pnl, 2)
+            stats["lotto_trades"] += 1
+        else:
+            stats["swing_pnl"] = round(stats["swing_pnl"] + pnl, 2)
+            stats["swing_trades"] += 1
+
+    total = stats["total_trades"]
+    stats["win_rate"] = round((stats["wins"] / total) * 100) if total else 0
+    return stats

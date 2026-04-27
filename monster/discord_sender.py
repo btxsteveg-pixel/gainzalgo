@@ -15,48 +15,31 @@ def send_discord_alert(config, alert, trade_plan):
     webhook = style_config["discord_webhook"]
     if not webhook:
         return False
+    if not _has_real_contract(trade_plan):
+        return False
     discord_config = config.get("discord") or {}
 
     is_buy = alert["side"] == "BUY"
     side_emoji = "🟢" if is_buy else "🔴"
     style_emoji = "🎯" if alert["trade_style"] == "LOTTO" else "📈"
-    contract_emoji = "📞" if trade_plan["contract_side"] == "CALL" else "📉"
     direction_label = "BULLISH" if is_buy else "BEARISH"
-    contract_label = _fmt_contract_label(trade_plan.get("option_symbol")) if trade_plan.get("option_symbol") else None
     timeframe_label = _fmt_timeframe(alert.get("timeframe"))
-    setup_label = _setup_label(alert, trade_plan)
-    description_bits = [f"{side_emoji} **{direction_label}** • {contract_emoji} **{trade_plan['contract_side']}**"]
+    description_bits = [f"{side_emoji} **{direction_label}** • **{trade_plan['contract_side']}**"]
     if timeframe_label != "N/A":
         description_bits.append(f"Timeframe: **{timeframe_label}**")
-    if setup_label:
-        description_bits.append(f"Setup: **{setup_label}**")
 
     fields = [
-        _field("Underlying", f"{alert['symbol']} @ {_fmt(alert['price'])}", True),
-        _field("Option Contract", contract_label or "N/A", True),
-        _field("Entry Premium", _fmt_money(trade_plan.get("contract_price")), True),
-        _field("Target Expiry", trade_plan.get("target_expiry"), True),
-        _field("Underlying TP1", _fmt(trade_plan["tp1"]), True),
-        _field("Underlying Stop", _fmt(trade_plan["stop"]), True),
-        _field("Confidence", f"{_fmt(alert['confidence'])}%", True),
-        _field("Reward / Risk", _fmt(trade_plan.get("reward_to_risk")), True),
-        _field("Data", _fmt_source(trade_plan.get("pricing_source"), trade_plan.get("contract_price_source")), True),
+        _field("Symbol", alert["symbol"], True),
+        _field("Contract Exp", _fmt_expiry(trade_plan.get("target_expiry")), True),
+        _field("Contract Price", _fmt_money(trade_plan.get("contract_price")), True),
     ]
-    if trade_plan.get("tp2") not in (None, ""):
-        fields.append(_field("Underlying TP2", _fmt(trade_plan["tp2"]), True))
-    if trade_plan.get("max_contracts") not in (None, ""):
-        fields.append(_field("Max Contracts", _fmt_int(trade_plan.get("max_contracts")), True))
-    if trade_plan.get("delta") not in (None, ""):
-        fields.append(_field("Delta", _fmt(trade_plan.get("delta")), True))
-    if trade_plan.get("open_interest") not in (None, ""):
-        fields.append(_field("Open Interest", _fmt_int(trade_plan.get("open_interest")), True))
 
     payload = {
         "username": f"GainzAlgo {alert['trade_style']}",
         "embeds": [
             {
                 "author": {"name": f"GainzAlgo Monster • {alert['trade_style']} Lane"},
-                "title": f"{style_emoji} {alert['trade_style']} {trade_plan['contract_side']} • {alert['symbol']}",
+                "title": f"{style_emoji} {alert['symbol']} • {trade_plan['contract_side']}",
                 "description": "\n".join(description_bits),
                 "fields": fields,
                 "color": 0x00E676 if alert["side"] == "BUY" else 0xFF1744,
@@ -67,6 +50,12 @@ def send_discord_alert(config, alert, trade_plan):
 
     payload["embeds"][0] = {k: v for k, v in payload["embeds"][0].items() if v is not None}
 
+    return send_discord_webhook_json(webhook, payload, discord_config)
+
+
+def send_discord_webhook_json(webhook, payload, discord_config):
+    if not webhook:
+        return False
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(
         webhook,
@@ -86,10 +75,44 @@ def send_discord_alert(config, alert, trade_plan):
     )
 
 
+def send_discord_webhook_multipart(webhook, payload, files, discord_config):
+    if not webhook:
+        return False
+    boundary = f"----GainzAlgoBoundary{int(time.time() * 1000)}"
+    data = _encode_multipart(boundary, payload, files)
+    req = request.Request(
+        webhook,
+        data=data,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": BROWSER_LIKE_USER_AGENT,
+        },
+        method="POST",
+    )
+    return _post_with_retry(
+        req,
+        timeout_seconds=float(discord_config.get("timeout_seconds", 6)),
+        max_retries=int(discord_config.get("max_retries", 2)),
+        retry_backoff_seconds=float(discord_config.get("retry_backoff_seconds", 0.75)),
+    )
+
+
 def _field(name, value, inline):
     if value in (None, ""):
         value = "N/A"
     return {"name": name, "value": str(value)[:1024], "inline": inline}
+
+
+def _has_real_contract(trade_plan):
+    pricing_source = str(trade_plan.get("pricing_source") or "").strip().lower()
+    if pricing_source in {"", "estimated"}:
+        return False
+    if not trade_plan.get("option_symbol"):
+        return False
+    if trade_plan.get("contract_price") in (None, "", 0):
+        return False
+    return True
 
 
 def _fmt_source(pricing_source, contract_price_source):
@@ -128,6 +151,19 @@ def _fmt_contract_label(option_symbol):
         return f"{root} {strike_text} {side} {month}/{day}"
     except (TypeError, ValueError):
         return symbol
+
+
+def _fmt_expiry(value):
+    text = str(value or "").strip()
+    if not text:
+        return "N/A"
+    try:
+        if "T" in text:
+            text = text.split("T", 1)[0]
+        year, month, day = text.split("-", 2)
+        return f"{int(month)}/{int(day)}/{int(year)}"
+    except (TypeError, ValueError):
+        return text
 
 
 def _footer_text(alert, trade_plan):
@@ -182,6 +218,11 @@ def _fmt_money(value):
     return "N/A" if text == "N/A" else f"${text}"
 
 
+def _fmt_pct(value):
+    text = _fmt(value)
+    return "N/A" if text == "N/A" else f"{text}%"
+
+
 def _fmt_int(value):
     if value in (None, ""):
         return "N/A"
@@ -198,6 +239,38 @@ def _fmt_timestamp(value):
     if "T" in text:
         text = text.replace("T", " ")
     return text[:16]
+
+
+def _encode_multipart(boundary, payload, files):
+    body = bytearray()
+
+    def write_line(line=""):
+        body.extend(str(line).encode("utf-8"))
+        body.extend(b"\r\n")
+
+    write_line(f"--{boundary}")
+    write_line('Content-Disposition: form-data; name="payload_json"')
+    write_line("Content-Type: application/json")
+    write_line()
+    body.extend(json.dumps(payload).encode("utf-8"))
+    body.extend(b"\r\n")
+
+    for index, file_info in enumerate(files or []):
+        field_name = str(file_info.get("field_name") or f"files[{index}]")
+        filename = str(file_info.get("filename") or f"attachment-{index}")
+        content_type = str(file_info.get("content_type") or "application/octet-stream")
+        data = file_info.get("data") or b""
+        if not isinstance(data, (bytes, bytearray)):
+            data = str(data).encode("utf-8")
+        write_line(f"--{boundary}")
+        write_line(f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"')
+        write_line(f"Content-Type: {content_type}")
+        write_line()
+        body.extend(data)
+        body.extend(b"\r\n")
+
+    write_line(f"--{boundary}--")
+    return bytes(body)
 
 
 def _post_with_retry(req, timeout_seconds, max_retries, retry_backoff_seconds):

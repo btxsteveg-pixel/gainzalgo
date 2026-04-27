@@ -14,12 +14,16 @@ except Exception:
         return {"open_positions": [], "recent_closed": [], "stats": {}}
 
 
+DASHBOARD_HIDDEN_SYMBOLS = {"BTCUSD", "BTCUSDT", "ETHUSD", "ETHUSDT"}
+
+
 def render_dashboard(config, public_base_url=None):
     states = load_all_states(config)
     states = attach_live_pnl(config, states)
+    display_states = _dashboard_states(states)
 
-    alerts = _collect_alerts(states)
-    closed_positions = _collect_closed_positions(states)
+    alerts = _collect_alerts(display_states)
+    closed_positions = _collect_closed_positions(display_states)
     latest_alert = alerts[-1] if alerts else None
     last_sent_alert = _latest_discord_alert(alerts)
     latest_error = _latest_webhook_error(states)
@@ -28,18 +32,22 @@ def render_dashboard(config, public_base_url=None):
     leaderboard = _leaderboard(alerts, closed_positions)
     risk = _risk_snapshot(states, alerts, closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
-    health = _health_snapshot(config, states, webhook_base_url)
+    health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
 
-    total_alerts = sum(int((state.get("stats") or {}).get("alerts_received", 0)) for state in states.values())
-    total_sent = sum(int((state.get("stats") or {}).get("discord_sent", 0)) for state in states.values())
-    total_closed_pnl = sum(_closed_pnl(state.get("closed_positions") or []) for state in states.values())
+    total_alerts = len(alerts)
+    total_sent = sum(1 for alert in alerts if alert.get("discord_sent"))
+    total_closed_pnl = sum(_closed_pnl(state.get("closed_positions") or []) for state in display_states.values())
     last_seen = max(
-        (state.get("last_updated") for state in states.values() if state.get("last_updated")),
+        (
+            item.get("time")
+            for item in alerts
+            if item.get("time")
+        ),
         default="Never",
     )
 
-    style_cards = "".join(_style_card(style, state) for style, state in states.items())
+    style_cards = "".join(_style_card(style, state) for style, state in display_states.items())
     closed_rows = "".join(_closed_trade_row(item) for item in reversed(closed_positions[-8:])) or (
         "<div class='empty'>No closed trades yet</div>"
     )
@@ -552,7 +560,8 @@ def _style_card(style, state):
     style_class = style.lower()
     controls = _status_controls(style, open_position)
     webhook_error_block = ""
-    if last_webhook_error.get("message"):
+    error_symbol = str(last_webhook_error.get("symbol") or "").strip().upper()
+    if last_webhook_error.get("message") and error_symbol not in DASHBOARD_HIDDEN_SYMBOLS:
         error_symbol = last_webhook_error.get("symbol") or "Unknown"
         error_time = _short_time(last_webhook_error.get("time"))
         webhook_error_block = f"""
@@ -668,6 +677,63 @@ def _collect_alerts(states):
         alerts.extend(state.get("recent_alerts") or [])
     alerts.sort(key=lambda item: item.get("time") or "")
     return alerts
+
+
+def _dashboard_states(states):
+    return {style: _dashboard_state(state) for style, state in states.items()}
+
+
+def _dashboard_state(state):
+    view = dict(state or {})
+    recent_alerts = [
+        dict(item)
+        for item in (state.get("recent_alerts") or [])
+        if _include_dashboard_alert(item)
+    ]
+    closed_positions = [
+        dict(item)
+        for item in (state.get("closed_positions") or [])
+        if _include_dashboard_position(item)
+    ]
+    open_position = state.get("open_position")
+
+    view["recent_alerts"] = recent_alerts
+    view["closed_positions"] = closed_positions
+    view["open_position"] = dict(open_position) if _include_dashboard_position(open_position) else None
+    view["last_alert"] = recent_alerts[-1] if recent_alerts else None
+    return view
+
+
+def _include_dashboard_alert(item):
+    return bool(item and item.get("time") and _has_real_contract_reference(item))
+
+
+def _include_dashboard_position(item):
+    return _has_real_contract_reference(item)
+
+
+def _has_real_contract_reference(item):
+    if not item:
+        return False
+
+    symbol = str(item.get("symbol") or "").strip().upper()
+    if not symbol or symbol in DASHBOARD_HIDDEN_SYMBOLS:
+        return False
+
+    if not item.get("option_symbol"):
+        return False
+
+    contract_price = item.get("contract_price")
+    if contract_price in (None, ""):
+        contract_price = item.get("entry_contract_price")
+    if contract_price in (None, "", 0):
+        return False
+
+    pricing_source = str(item.get("pricing_source") or "").strip().lower()
+    if pricing_source == "estimated":
+        return False
+
+    return True
 
 
 def _collect_closed_positions(states):
@@ -904,6 +970,9 @@ def _latest_webhook_error(states):
     for state in states.values():
         item = state.get("last_webhook_error") or {}
         if not item.get("message"):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if symbol and symbol in DASHBOARD_HIDDEN_SYMBOLS:
             continue
         parsed = _parse_iso(item.get("time"))
         if latest is None or (parsed and (latest_time is None or parsed > latest_time)):
@@ -1156,6 +1225,16 @@ def _paper_section(paper):
         sign = "+" if v >= 0 else ""
         return f"{sign}${v:.2f}"
 
+    def fmt_return_pct(pnl, entry_price, contracts):
+        try:
+            cost_basis = float(entry_price) * 100 * max(int(contracts or 0), 1)
+            if cost_basis <= 0:
+                return ""
+            pct = (float(pnl) / cost_basis) * 100
+            return f"{pct:+.1f}%"
+        except (TypeError, ValueError, ZeroDivisionError):
+            return ""
+
     # ── Stat cards ───────────────────────────────────────────────────────
     stat_cards = f"""
         <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
@@ -1194,6 +1273,12 @@ def _paper_section(paper):
             entry       = p.get("entry_contract_price") or 0
             current     = p.get("current_contract_price") or entry
             unreal      = p.get("unrealized_pnl", 0.0) or 0.0
+            unreal_pct  = fmt_return_pct(unreal, entry, contracts)
+            unreal_pct_html = (
+                f'<span style="display:block;color:#666;font-size:10px;font-weight:500">{escape(unreal_pct)}</span>'
+                if unreal_pct
+                else ""
+            )
             opt_sym     = escape(str(p.get("option_symbol", "—")))
             tp          = p.get("tp")
             sl          = p.get("sl")
@@ -1215,7 +1300,7 @@ def _paper_section(paper):
                 <span>${entry:.2f}</span>
                 <span>{und_str}</span>
                 <span>TP: {f"${float(tp):.2f}" if tp else "—"} / SL: {f"${float(sl):.2f}" if sl else "—"}</span>
-                <span style="color:{pnl_color(unreal)};font-weight:600">{fmt_pnl(unreal)}</span>
+                <span style="color:{pnl_color(unreal)};font-weight:600">{fmt_pnl(unreal)}{unreal_pct_html}</span>
                 <span style="color:#666">{entered}</span>
               </div>"""
 
@@ -1251,7 +1336,14 @@ def _paper_section(paper):
             style   = escape(str(p.get("style", "")))
             entry   = p.get("entry_contract_price") or 0
             exit_px = p.get("exit_contract_price")
+            contracts = p.get("contracts", 1)
             rpnl    = p.get("realized_pnl", 0.0) or 0.0
+            realized_pct = fmt_return_pct(rpnl, entry, contracts)
+            realized_pct_html = (
+                f'<span style="display:block;color:#666;font-size:10px;font-weight:500">{escape(realized_pct)}</span>'
+                if realized_pct
+                else ""
+            )
             reason  = escape(str(p.get("exit_reason", "—")))
             closed_at = str(p.get("closed_at", ""))[:16].replace("T", " ")
 
@@ -1268,7 +1360,7 @@ def _paper_section(paper):
                 <span>${entry:.2f}</span>
                 <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
                 <span style="color:#aaa;font-size:11px">{reason}</span>
-                <span style="color:{pnl_color(rpnl)};font-weight:600">{fmt_pnl(rpnl)}</span>
+                <span style="color:{pnl_color(rpnl)};font-weight:600">{fmt_pnl(rpnl)}{realized_pct_html}</span>
                 <span style="color:#555;font-size:11px">{closed_at}</span>
               </div>"""
 
