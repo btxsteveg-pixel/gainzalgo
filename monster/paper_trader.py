@@ -577,11 +577,12 @@ def get_paper_summary(config):
         return {
             "open_positions": open_positions,
             "recent_closed": closed_positions[-10:][::-1],
+            "all_closed_positions": closed_positions,
             "stats": stats,
         }
     except Exception as exc:
         logger.error(f"Paper summary error: {exc}")
-        return {"open_positions": [], "recent_closed": [], "stats": {}}
+        return {"open_positions": [], "recent_closed": [], "all_closed_positions": [], "stats": {}}
 
 
 def _include_dashboard_paper_position(position):

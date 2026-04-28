@@ -21,23 +21,26 @@ def render_dashboard(config, public_base_url=None):
     states = load_all_states(config)
     states = attach_live_pnl(config, states)
     display_states = _dashboard_states(states)
+    paper = get_paper_summary(config) if _PAPER_TRADER_AVAILABLE else {"open_positions": [], "recent_closed": [], "all_closed_positions": [], "stats": {}}
+    paper_closed_positions = paper.get("all_closed_positions") or []
+    paper_stats = paper.get("stats") or {}
 
     alerts = _collect_alerts(display_states)
     closed_positions = _collect_closed_positions(display_states)
     latest_alert = alerts[-1] if alerts else None
     last_sent_alert = _latest_discord_alert(alerts)
     latest_error = _latest_webhook_error(states)
-    today = _summary_window(alerts, closed_positions, timedelta(days=1))
-    week = _summary_window(alerts, closed_positions, timedelta(days=7))
-    leaderboard = _leaderboard(alerts, closed_positions)
-    risk = _risk_snapshot(states, alerts, closed_positions)
+    today = _summary_window(alerts, paper_closed_positions, timedelta(days=1))
+    week = _summary_window(alerts, paper_closed_positions, timedelta(days=7))
+    leaderboard = _leaderboard(alerts, paper_closed_positions)
+    risk = _risk_snapshot(states, alerts, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
 
     total_alerts = len(alerts)
     total_sent = sum(1 for alert in alerts if alert.get("discord_sent"))
-    total_closed_pnl = sum(_closed_pnl(state.get("closed_positions") or []) for state in display_states.values())
+    total_closed_pnl = float(paper_stats.get("total_pnl", 0.0) or 0.0)
     last_seen = max(
         (
             item.get("time")
@@ -48,7 +51,8 @@ def render_dashboard(config, public_base_url=None):
     )
 
     style_cards = "".join(_style_card(style, state) for style, state in display_states.items())
-    closed_rows = "".join(_closed_trade_row(item) for item in reversed(closed_positions[-8:])) or (
+    recent_closed_for_dashboard = paper.get("recent_closed") or []
+    closed_rows = "".join(_closed_trade_row(item) for item in recent_closed_for_dashboard[:8]) or (
         "<div class='empty'>No closed trades yet</div>"
     )
     leaderboard_rows = "".join(_leaderboard_row(item) for item in leaderboard) or (
@@ -58,8 +62,6 @@ def render_dashboard(config, public_base_url=None):
 
     hero = _hero(latest_alert)
 
-    # Paper trading summary
-    paper = get_paper_summary(config) if _PAPER_TRADER_AVAILABLE else {"open_positions": [], "recent_closed": [], "stats": {}}
     paper_section = _paper_section(paper)
 
     return f"""
@@ -428,7 +430,7 @@ def render_dashboard(config, public_base_url=None):
             <div class="summary">
               <div><span>Total Alerts</span><strong>{total_alerts}</strong></div>
               <div><span>Discord Sent</span><strong>{total_sent}</strong></div>
-              <div><span>Net Closed P&amp;L</span><strong class="{_pnl_class(total_closed_pnl)}">{escape(_fmt_money(total_closed_pnl))}</strong></div>
+              <div><span>Paper Realized P&amp;L</span><strong class="{_pnl_class(total_closed_pnl)}">{escape(_fmt_money(total_closed_pnl))}</strong></div>
               <div><span>Last Seen</span><strong>{escape(_short_time(last_seen))}</strong></div>
               <div><span>Last Discord</span><strong>{escape(_short_time((last_sent_alert or {}).get("time")))}</strong></div>
               <div><span>Last Reject</span><strong>{escape(_short_time((latest_error or {}).get("time")))}</strong></div>
@@ -474,7 +476,7 @@ def render_dashboard(config, public_base_url=None):
 
         <section class="layout">
           <section class="panel">
-            <div class="section-title">Recent Closed Trades</div>
+            <div class="section-title">Recent Closed Paper Trades</div>
             <div class="table closed-table">
               <div class="table-head">
                 <span>Trade</span><span>Lane</span><span>Result</span><span>Price</span><span>Closed</span>
@@ -519,8 +521,7 @@ def _style_card(style, state):
     closed_positions = state.get("closed_positions") or []
     last_webhook_error = state.get("last_webhook_error") or {}
     win_rate = _win_rate(stats)
-    closed_pnl = _closed_pnl(closed_positions)
-    live_pnl = open_position.get("live_pnl")
+    tracked_closures = len(closed_positions)
 
     rows = []
     for alert in reversed(alerts[-5:]):
@@ -552,8 +553,6 @@ def _style_card(style, state):
     option_symbol = escape(_fmt_contract(open_position.get("option_symbol")))
     option_entry = escape(_fmt_money(open_position.get("entry_contract_price")))
     option_mark = escape(_fmt_money(open_position.get("current_contract_price")))
-    live_pnl_class = _pnl_class(live_pnl)
-    closed_pnl_class = _pnl_class(closed_pnl)
     pricing_badge = escape(_pricing_badge(open_position))
     position_status = escape(str(open_position.get("status") or "N/A"))
     status_class = _status_class(open_position.get("status"))
@@ -596,8 +595,8 @@ def _style_card(style, state):
       </div>
 
       <div class="strip">
-        <div><span>Closed P&amp;L</span><strong class="{closed_pnl_class}">{escape(_fmt_money(closed_pnl))}</strong></div>
-        <div><span>Live P&amp;L</span><strong class="{live_pnl_class}">{escape(_fmt_money(live_pnl))}</strong></div>
+        <div><span>Tracked Closures</span><strong>{tracked_closures}</strong></div>
+        <div><span>Contract Source</span><strong>{pricing_badge}</strong></div>
         <div><span>Status</span><strong class="{status_class}">{position_status}</strong></div>
       </div>
       {webhook_error_block}
@@ -614,7 +613,7 @@ def _style_card(style, state):
           <div><span>Entry Premium</span><strong>{option_entry}</strong></div>
           <div><span>Live Premium</span><strong>{option_mark}</strong></div>
           <div><span>Source</span><strong>{pricing_badge}</strong></div>
-          <div><span>Live P&amp;L %</span><strong class="{live_pnl_class}">{escape(_fmt_pct(open_position.get("live_pnl_pct")))}</strong></div>
+          <div><span>Live P&amp;L %</span><strong class="{_pnl_class(open_position.get('live_pnl'))}">{escape(_fmt_pct(open_position.get("live_pnl_pct")))}</strong></div>
         </div>
         {controls}
       </div>
@@ -762,9 +761,7 @@ def _summary_window(alerts, closed_positions, delta):
         parsed = _parse_iso(item.get("closed_at"))
         if parsed and parsed >= cutoff:
             closed_count += 1
-            value = item.get("option_pnl")
-            if value is None:
-                value = item.get("pnl")
+            value = _trade_pnl(item)
             if value is not None:
                 pnl += float(value)
 
@@ -786,9 +783,7 @@ def _leaderboard(alerts, closed_positions):
         if not symbol:
             continue
         closed_counts[symbol] += 1
-        value = trade.get("option_pnl")
-        if value is None:
-            value = trade.get("pnl")
+        value = _trade_pnl(trade)
         if value is not None:
             pnl_map[symbol] += float(value)
 
@@ -918,27 +913,29 @@ def _recap_lines(today, week, latest_alert, risk):
     latest_side = latest_alert.get("side") if latest_alert else "N/A"
     latest_style = latest_alert.get("trade_style") if latest_alert else "N/A"
     return (
-        f"Today: {today['alerts']} alerts landed, {today['closed']} trades closed, { _fmt_money(today['pnl']) } realized.\n"
-        f"Week: {week['alerts']} alerts, {week['closed']} closed trades, { _fmt_money(week['pnl']) } on the board.\n"
+        f"Today: {today['alerts']} alerts landed, {today['closed']} paper trades closed, { _fmt_money(today['pnl']) } realized.\n"
+        f"Week: {week['alerts']} alerts, {week['closed']} paper trades closed, { _fmt_money(week['pnl']) } on the board.\n"
         f"Latest confirmed lane: {latest_style} {latest_symbol} {latest_side}.\n"
         f"Desk note: {risk['note']}"
     )
 
 
 def _closed_trade_row(item):
-    pnl = item.get("option_pnl")
-    if pnl is None:
-        pnl = item.get("pnl")
+    pnl = _trade_pnl(item)
     pnl_class = _pnl_class(pnl)
+    style = item.get("trade_style") or item.get("style")
+    close_price = item.get("close_price")
+    if close_price is None:
+        close_price = item.get("exit_contract_price")
     return f"""
     <div class="row">
       <div>
         <div class="alert-symbol">{escape(str(item.get('symbol') or 'N/A'))}</div>
         <div class="alert-meta">{escape(_fmt_contract(item.get('option_symbol')))}</div>
       </div>
-      <div>{escape(str(item.get('trade_style') or 'N/A'))}</div>
+      <div>{escape(str(style or 'N/A'))}</div>
       <div><strong class="{pnl_class}">{escape(_fmt_money(pnl))}</strong></div>
-      <div>{escape(_fmt(item.get('close_price')))}</div>
+      <div>{escape(_fmt(close_price))}</div>
       <div>{escape(_short_time(item.get('closed_at')))}</div>
     </div>
     """
@@ -1030,9 +1027,7 @@ def _signal_flow_text(last_sent_alert, latest_error):
 def _loss_streak(closed_positions):
     streak = 0
     for trade in reversed(closed_positions):
-        pnl = trade.get("option_pnl")
-        if pnl is None:
-            pnl = trade.get("pnl")
+        pnl = _trade_pnl(trade)
         if pnl is None:
             continue
         if float(pnl) < 0:
@@ -1046,12 +1041,23 @@ def _closed_pnl(closed_positions):
     total = 0.0
     found = False
     for position in closed_positions:
-        pnl = position.get("option_pnl")
+        pnl = _trade_pnl(position)
         if pnl is None:
             continue
         total += float(pnl)
         found = True
     return round(total, 2) if found else 0.0
+
+
+def _trade_pnl(item):
+    if not item:
+        return None
+    pnl = item.get("realized_pnl")
+    if pnl is None:
+        pnl = item.get("option_pnl")
+    if pnl is None:
+        pnl = item.get("pnl")
+    return pnl
 
 
 def _pricing_badge(open_position):
