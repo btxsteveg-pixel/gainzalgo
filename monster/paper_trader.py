@@ -23,7 +23,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -37,7 +37,6 @@ MONITOR_INTERVAL_SECONDS = 60       # how often the monitor thread polls
 FORCE_CLOSE_HOUR_ET = 15            # 3 PM hour in ET
 FORCE_CLOSE_MINUTE_ET = 55          # 3:55 PM ET force-close trigger
 MAX_CLOSED_HISTORY = 200            # cap closed positions in state file
-DASHBOARD_HIDDEN_SYMBOLS = {"BTCUSD", "BTCUSDT", "ETHUSD", "ETHUSDT"}
 
 # Singleton monitor thread — one per process
 _monitor_thread = None
@@ -57,6 +56,15 @@ def _et_now():
     except ImportError:
         from datetime import timedelta
         return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
+
+
+def _parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _is_market_hours():
@@ -177,6 +185,13 @@ def _close_paper_position(config, option_symbol):
     return _alpaca_paper_call(config, "DELETE", f"/v2/positions/{encoded}")
 
 
+def _sell_paper_contracts(config, option_symbol, qty):
+    """Sell a specific number of option contracts from an open paper position."""
+    if not option_symbol or qty in (None, 0):
+        return None
+    return _place_paper_order(config, option_symbol, qty, side="sell")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # PRICE HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -236,7 +251,7 @@ def _send_exit_notification(config, position, reason, exit_price, pnl):
 
     # Calculate return %
     entry = position.get("entry_contract_price") or 0
-    contracts = position.get("contracts", 1) or 1
+    contracts = position.get("contracts_closed", position.get("contracts", 1)) or 1
     pct_str = ""
     if entry and exit_price:
         pct = ((exit_price - entry) / entry) * 100
@@ -295,7 +310,7 @@ def _send_exit_notification(config, position, reason, exit_price, pnl):
 # POSITION CLOSE LOGIC
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _close_position(config, position, reason):
+def _close_position(config, position, reason, *, contracts_to_close=None, status="closed"):
     """
     Close a paper position:
     1. Send close order to Alpaca paper
@@ -305,10 +320,18 @@ def _close_position(config, position, reason):
     Returns (closed_position_dict, realized_pnl)
     """
     option_symbol = position.get("option_symbol", "")
+    remaining_contracts = int(position.get("contracts", 1) or 1)
+    contracts_to_close = int(contracts_to_close or remaining_contracts)
+    contracts_to_close = max(1, min(contracts_to_close, remaining_contracts))
+    is_full_close = contracts_to_close >= remaining_contracts
     exit_price = None
 
     if option_symbol:
-        result = _close_paper_position(config, option_symbol)
+        result = (
+            _close_paper_position(config, option_symbol)
+            if is_full_close
+            else _sell_paper_contracts(config, option_symbol, contracts_to_close)
+        )
         if result:
             order_id = result.get("id")
             if order_id:
@@ -325,21 +348,35 @@ def _close_position(config, position, reason):
             exit_price = _live_contract_price(config, option_symbol)
 
     entry = position.get("entry_contract_price") or 0
-    contracts = position.get("contracts", 1) or 1
-    pnl = round((exit_price - entry) * 100 * contracts, 2) if exit_price is not None else 0.0
+    tranche_pnl = (
+        round((exit_price - entry) * 100 * contracts_to_close, 2)
+        if exit_price is not None else 0.0
+    )
+    prior_realized = float(position.get("realized_pnl_to_date", 0.0) or 0.0)
+    cumulative_realized = round(prior_realized + tranche_pnl, 2)
+    display_pnl = cumulative_realized if is_full_close else tranche_pnl
 
     closed = {
         **position,
-        "status": "closed",
+        "status": status.upper(),
+        "contracts_closed": contracts_to_close,
+        "contracts_before_close": remaining_contracts,
+        "remaining_contracts_after": max(remaining_contracts - contracts_to_close, 0),
         "exit_contract_price": exit_price,
         "exit_reason": reason,
         "closed_at": datetime.now(timezone.utc).isoformat(),
-        "realized_pnl": pnl,
+        "realized_pnl": display_pnl,
+        "pnl_for_stats": tranche_pnl,
+        "realized_pnl_to_date": cumulative_realized,
     }
 
-    _send_exit_notification(config, position, reason, exit_price, pnl)
-    logger.info(f"Paper position closed: {option_symbol} → {reason} | P&L ${pnl:+.2f}")
-    return closed, pnl
+    _send_exit_notification(config, closed, reason, exit_price, display_pnl)
+    logger.info(
+        f"Paper position {'closed' if is_full_close else 'trimmed'}: "
+        f"{option_symbol} x{contracts_to_close} → {reason} | "
+        f"P&L ${tranche_pnl:+.2f}"
+    )
+    return closed, tranche_pnl
 
 
 def _update_stats(state, position, pnl):
@@ -363,6 +400,37 @@ def _update_stats(state, position, pnl):
     else:
         stats["swing_pnl"] = round(stats.get("swing_pnl", 0.0) + pnl, 2)
         stats["swing_trades"] = stats.get("swing_trades", 0) + 1
+
+
+def _mark_tp1_trim(position, closed_event, trail_pct):
+    remaining_contracts = closed_event.get("remaining_contracts_after", position.get("contracts", 0))
+    position["contracts"] = remaining_contracts
+    position["status"] = "TP1 HIT" if remaining_contracts else "CLOSED"
+    position["tp1_hit"] = True
+    position["tp1_hit_at"] = closed_event.get("closed_at")
+    position["last_trim_reason"] = closed_event.get("exit_reason")
+    position["last_trim_contract_price"] = closed_event.get("exit_contract_price")
+    position["realized_pnl_to_date"] = closed_event.get("realized_pnl_to_date", position.get("realized_pnl_to_date", 0.0))
+
+    trail_anchor = closed_event.get("exit_contract_price") or position.get("current_contract_price")
+    if trail_anchor is not None:
+        position["highest_contract_price_since_tp1"] = trail_anchor
+        if trail_pct not in (None, 0):
+            position["trailing_stop_price"] = round(trail_anchor * (1 - trail_pct), 4)
+
+
+def _trail_stop_hit(position, contract_price):
+    trailing_stop_price = position.get("trailing_stop_price")
+    if contract_price in (None, 0) or trailing_stop_price in (None, 0):
+        return False
+    return contract_price <= trailing_stop_price
+
+
+def _hold_days_expired(position, hold_days_max):
+    entered_at = _parse_iso_datetime(position.get("entered_at"))
+    if not entered_at or hold_days_max in (None, 0):
+        return False
+    return datetime.now(timezone.utc) - entered_at >= timedelta(days=int(hold_days_max))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -395,22 +463,37 @@ def _monitor_loop(config):
                     tp = pos.get("tp")
                     sl = pos.get("sl")
                     contract_side = pos.get("side", "CALL")  # CALL or PUT
+                    style = pos.get("style", "LOTTO")
+                    style_cfg = config["styles"].get(style, {})
+                    is_swing = style == "SWING"
+                    trailing_stop_pct = float(style_cfg.get("trailing_stop_pct", 0.0) or 0.0)
+                    trailing_stop_enabled = bool(style_cfg.get("trailing_stop_enabled")) and is_swing
+                    hold_days_max = style_cfg.get("hold_days_max") if is_swing else None
 
                     # ── Force close at 3:55 PM ET ─────────────────────────
                     if force_close:
                         closed, pnl = _close_position(config, pos, "Force close 3:55 PM ET")
                         newly_closed.append(closed)
-                        _update_stats(state, closed, pnl)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                        continue
+
+                    if is_swing and _hold_days_expired(pos, hold_days_max):
+                        closed, pnl = _close_position(
+                            config,
+                            pos,
+                            f"Max hold reached ({int(hold_days_max)} days)",
+                        )
+                        newly_closed.append(closed)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
                         continue
 
                     # ── TP/SL check ───────────────────────────────────────
                     underlying = _live_underlying_price(config, symbol)
-                    if underlying is None:
-                        still_open.append(pos)
-                        continue
+                    opt_sym = pos.get("option_symbol")
+                    contract_px = _live_contract_price(config, opt_sym) if opt_sym else None
 
                     hit_tp = hit_sl = False
-                    if tp is not None and sl is not None:
+                    if underlying is not None and tp is not None and sl is not None:
                         if contract_side == "CALL":
                             hit_tp = underlying >= float(tp)
                             hit_sl = underlying <= float(sl)
@@ -418,34 +501,82 @@ def _monitor_loop(config):
                             hit_tp = underlying <= float(tp)
                             hit_sl = underlying >= float(sl)
 
+                    if hit_tp and is_swing and not pos.get("tp1_hit"):
+                        contracts_remaining = int(pos.get("contracts", 1) or 1)
+                        if contracts_remaining <= 1:
+                            closed, pnl = _close_position(
+                                config,
+                                pos,
+                                f"TP1 hit — single contract @ ${underlying:.2f}",
+                                status="tp1_hit",
+                            )
+                            newly_closed.append(closed)
+                            _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                            continue
+
+                        remainder = max(1, contracts_remaining // 2)
+                        contracts_to_trim = contracts_remaining - remainder
+                        closed, pnl = _close_position(
+                            config,
+                            pos,
+                            f"TP1 hit — trimmed {contracts_to_trim}/{contracts_remaining} @ ${underlying:.2f}",
+                            contracts_to_close=contracts_to_trim,
+                            status="trimmed",
+                        )
+                        newly_closed.append(closed)
+                        _mark_tp1_trim(pos, closed, trailing_stop_pct if trailing_stop_enabled else 0.0)
+                        still_open.append(pos)
+                        continue
+
                     if hit_tp:
                         closed, pnl = _close_position(
                             config, pos, f"TP hit — underlying @ ${underlying:.2f}"
                         )
                         newly_closed.append(closed)
-                        _update_stats(state, closed, pnl)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                        continue
 
-                    elif hit_sl:
+                    if hit_sl:
                         closed, pnl = _close_position(
                             config, pos, f"SL hit — underlying @ ${underlying:.2f}"
                         )
                         newly_closed.append(closed)
-                        _update_stats(state, closed, pnl)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                        continue
 
-                    else:
-                        # ── Update live prices on open positions ──────────
+                    if trailing_stop_enabled and pos.get("tp1_hit"):
+                        if contract_px is not None:
+                            high_water = max(
+                                float(pos.get("highest_contract_price_since_tp1", 0.0) or 0.0),
+                                float(contract_px),
+                            )
+                            pos["highest_contract_price_since_tp1"] = round(high_water, 4)
+                            if trailing_stop_pct > 0:
+                                pos["trailing_stop_price"] = round(high_water * (1 - trailing_stop_pct), 4)
+
+                        if _trail_stop_hit(pos, contract_px):
+                            closed, pnl = _close_position(
+                                config,
+                                pos,
+                                f"Trailing stop hit @ ${contract_px:.2f}",
+                                status="closed",
+                            )
+                            newly_closed.append(closed)
+                            _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                            continue
+
+                    # ── Update live prices on open positions ──────────────
+                    if underlying is not None:
                         pos["current_underlying_price"] = round(underlying, 4)
-                        opt_sym = pos.get("option_symbol")
-                        if opt_sym:
-                            contract_px = _live_contract_price(config, opt_sym)
-                            if contract_px is not None:
-                                pos["current_contract_price"] = contract_px
-                                entry = pos.get("entry_contract_price") or 0
-                                contracts = pos.get("contracts", 1) or 1
-                                pos["unrealized_pnl"] = round(
-                                    (contract_px - entry) * 100 * contracts, 2
-                                )
-                        still_open.append(pos)
+                    if contract_px is not None:
+                        pos["current_contract_price"] = contract_px
+                        entry = pos.get("entry_contract_price") or 0
+                        contracts = pos.get("contracts", 1) or 1
+                        pos["unrealized_pnl"] = round(
+                            (contract_px - entry) * 100 * contracts, 2
+                        )
+                        pos["live_pnl_pct"] = round(((contract_px - entry) / entry) * 100, 2) if entry else None
+                    still_open.append(pos)
 
                 state["open_positions"] = still_open
                 state["closed_positions"] = (
@@ -526,14 +657,28 @@ def execute_paper_trade(config, alert, trade_plan):
         "option_symbol": option_symbol,
         "side": trade_plan["contract_side"],  # CALL or PUT
         "style": style,
+        "initial_contracts": contracts,
         "contracts": contracts,
         "entry_contract_price": float(fill_price) if fill_price else None,
         "entry_underlying_price": trade_plan.get("underlying_reference_price"),
         "current_underlying_price": trade_plan.get("underlying_reference_price"),
         "current_contract_price": float(fill_price) if fill_price else None,
+        "pricing_source": trade_plan.get("pricing_source"),
+        "contract_price_source": trade_plan.get("contract_price_source"),
         "unrealized_pnl": 0.0,
+        "live_pnl_pct": 0.0,
         "tp": alert.get("take_profit"),
+        "tp1": trade_plan.get("tp1"),
+        "tp2": trade_plan.get("tp2"),
         "sl": alert.get("stop_loss"),
+        "hold_days_max": style_cfg.get("hold_days_max") if style == "SWING" else None,
+        "trailing_stop_enabled": bool(trade_plan.get("trailing_stop_enabled")),
+        "trailing_stop_pct": trade_plan.get("trailing_stop_pct"),
+        "tp1_hit": False,
+        "tp1_hit_at": None,
+        "highest_contract_price_since_tp1": None,
+        "trailing_stop_price": None,
+        "realized_pnl_to_date": 0.0,
         "target_expiry": trade_plan.get("target_expiry"),
         "risk_budget": risk_budget,
         "alpaca_order_id": order_id,
@@ -552,10 +697,16 @@ def execute_paper_trade(config, alert, trade_plan):
         _save_state(config, state)
 
     ensure_monitor_running(config)
-    logger.info(
-        f"Paper position opened: {option_symbol} x{contracts} "
-        f"@ ${fill_price:.2f if fill_price else 'N/A'} | budget ${risk_budget}"
-    )
+    if fill_price is not None:
+        logger.info(
+            f"Paper position opened: {option_symbol} x{contracts} "
+            f"@ ${fill_price:.2f} | budget ${risk_budget}"
+        )
+    else:
+        logger.info(
+            f"Paper position opened: {option_symbol} x{contracts} "
+            f"@ N/A | budget ${risk_budget}"
+        )
 
 
 def get_paper_summary(config):
@@ -565,70 +716,25 @@ def get_paper_summary(config):
     """
     try:
         state = _load_state(config)
-        open_positions = [
-            position for position in state.get("open_positions", [])
-            if _include_dashboard_paper_position(position)
-        ]
-        closed_positions = [
-            position for position in state.get("closed_positions", [])
-            if _include_dashboard_paper_position(position)
-        ]
-        stats = _dashboard_paper_stats(closed_positions)
+        stats = state.get("stats", {})
+        total = stats.get("total_trades", 0)
+        wins = stats.get("wins", 0)
         return {
-            "open_positions": open_positions,
-            "recent_closed": closed_positions[-10:][::-1],
-            "all_closed_positions": closed_positions,
-            "stats": stats,
+            "open_positions": state.get("open_positions", []),
+            "recent_closed": state.get("closed_positions", [])[-10:][::-1],
+            "all_closed_positions": state.get("closed_positions", []),
+            "stats": {
+                "total_trades": total,
+                "wins": wins,
+                "losses": stats.get("losses", 0),
+                "win_rate": round(wins / total * 100) if total else 0,
+                "total_pnl": stats.get("total_pnl", 0.0),
+                "lotto_pnl": stats.get("lotto_pnl", 0.0),
+                "swing_pnl": stats.get("swing_pnl", 0.0),
+                "lotto_trades": stats.get("lotto_trades", 0),
+                "swing_trades": stats.get("swing_trades", 0),
+            },
         }
     except Exception as exc:
         logger.error(f"Paper summary error: {exc}")
         return {"open_positions": [], "recent_closed": [], "all_closed_positions": [], "stats": {}}
-
-
-def _include_dashboard_paper_position(position):
-    if not position:
-        return False
-    symbol = str(position.get("symbol") or "").strip().upper()
-    if not symbol or symbol in DASHBOARD_HIDDEN_SYMBOLS:
-        return False
-    if not position.get("option_symbol"):
-        return False
-    if position.get("entry_contract_price") in (None, "", 0):
-        return False
-    return True
-
-
-def _dashboard_paper_stats(closed_positions):
-    stats = {
-        "total_trades": 0,
-        "wins": 0,
-        "losses": 0,
-        "win_rate": 0,
-        "total_pnl": 0.0,
-        "lotto_pnl": 0.0,
-        "swing_pnl": 0.0,
-        "lotto_trades": 0,
-        "swing_trades": 0,
-    }
-
-    for position in closed_positions:
-        pnl = float(position.get("realized_pnl") or 0.0)
-        style = str(position.get("style") or "LOTTO").upper()
-
-        stats["total_trades"] += 1
-        if pnl > 0:
-            stats["wins"] += 1
-        else:
-            stats["losses"] += 1
-
-        stats["total_pnl"] = round(stats["total_pnl"] + pnl, 2)
-        if style == "LOTTO":
-            stats["lotto_pnl"] = round(stats["lotto_pnl"] + pnl, 2)
-            stats["lotto_trades"] += 1
-        else:
-            stats["swing_pnl"] = round(stats["swing_pnl"] + pnl, 2)
-            stats["swing_trades"] += 1
-
-    total = stats["total_trades"]
-    stats["win_rate"] = round((stats["wins"] / total) * 100) if total else 0
-    return stats

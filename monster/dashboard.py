@@ -11,7 +11,7 @@ try:
 except Exception:
     _PAPER_TRADER_AVAILABLE = False
     def get_paper_summary(config):
-        return {"open_positions": [], "recent_closed": [], "stats": {}}
+        return {"open_positions": [], "recent_closed": [], "all_closed_positions": [], "stats": {}}
 
 
 DASHBOARD_HIDDEN_SYMBOLS = {"BTCUSD", "BTCUSDT", "ETHUSD", "ETHUSDT"}
@@ -23,10 +23,10 @@ def render_dashboard(config, public_base_url=None):
     display_states = _dashboard_states(states)
     paper = get_paper_summary(config) if _PAPER_TRADER_AVAILABLE else {"open_positions": [], "recent_closed": [], "all_closed_positions": [], "stats": {}}
     paper_closed_positions = paper.get("all_closed_positions") or []
+    paper_open_positions = paper.get("open_positions") or []
     paper_stats = paper.get("stats") or {}
 
     alerts = _collect_alerts(display_states)
-    closed_positions = _collect_closed_positions(display_states)
     latest_alert = alerts[-1] if alerts else None
     last_sent_alert = _latest_discord_alert(alerts)
     latest_error = _latest_webhook_error(states)
@@ -34,6 +34,8 @@ def render_dashboard(config, public_base_url=None):
     week = _summary_window(alerts, paper_closed_positions, timedelta(days=7))
     leaderboard = _leaderboard(alerts, paper_closed_positions)
     risk = _risk_snapshot(states, alerts, paper_closed_positions)
+    lane_analytics = _lane_analytics(alerts, paper_open_positions, paper_closed_positions)
+    execution_funnel = _execution_funnel(alerts, paper_open_positions, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
@@ -50,13 +52,19 @@ def render_dashboard(config, public_base_url=None):
         default="Never",
     )
 
-    style_cards = "".join(_style_card(style, state) for style, state in display_states.items())
+    style_cards = "".join(
+        _style_card(style, state, lane_analytics.get(style, {}))
+        for style, state in display_states.items()
+    )
     recent_closed_for_dashboard = paper.get("recent_closed") or []
     closed_rows = "".join(_closed_trade_row(item) for item in recent_closed_for_dashboard[:8]) or (
         "<div class='empty'>No closed trades yet</div>"
     )
     leaderboard_rows = "".join(_leaderboard_row(item) for item in leaderboard) or (
         "<div class='empty'>Leaderboard wakes up after more alerts land</div>"
+    )
+    lane_rows = "".join(_lane_analytics_row(item) for item in lane_analytics.values()) or (
+        "<div class='empty'>Lane analytics will populate after paper trades close.</div>"
     )
     recap_lines = _recap_lines(today, week, latest_alert, risk)
 
@@ -470,6 +478,29 @@ def render_dashboard(config, public_base_url=None):
           </section>
         </section>
 
+        <section class="layout">
+          <section class="panel">
+            <div class="section-title">Execution Funnel</div>
+            <div class="hero-grid">
+              <div class="grid-stat"><span>Alerts Received</span><strong>{execution_funnel['alerts']}</strong></div>
+              <div class="grid-stat"><span>Real Contracts</span><strong>{execution_funnel['matched']}</strong></div>
+              <div class="grid-stat"><span>Discord Sent</span><strong>{execution_funnel['discord_sent']}</strong></div>
+              <div class="grid-stat"><span>Paper Entered</span><strong>{execution_funnel['paper_entered']}</strong></div>
+              <div class="grid-stat"><span>Match Rate</span><strong>{escape(_fmt_pct(execution_funnel['match_rate']))}</strong></div>
+              <div class="grid-stat"><span>Execution Rate</span><strong>{escape(_fmt_pct(execution_funnel['paper_entry_rate']))}</strong></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title">Lane Analytics</div>
+            <div class="table leader-table">
+              <div class="table-head">
+                <span>Lane</span><span>Alerts</span><span>Closed</span><span>P&amp;L</span>
+              </div>
+              {lane_rows}
+            </div>
+          </section>
+        </section>
+
         <section class="grid">
           {style_cards}
         </section>
@@ -513,15 +544,17 @@ def render_dashboard(config, public_base_url=None):
     """
 
 
-def _style_card(style, state):
+def _style_card(style, state, lane_stats):
     alerts = state.get("recent_alerts", [])
     last = state.get("last_alert") or {}
-    open_position = state.get("open_position") or {}
+    open_position = dict(lane_stats.get("open_position") or {})
     stats = state.get("stats") or {}
-    closed_positions = state.get("closed_positions") or []
     last_webhook_error = state.get("last_webhook_error") or {}
-    win_rate = _win_rate(stats)
-    tracked_closures = len(closed_positions)
+    win_rate = _fmt_pct(lane_stats.get("win_rate"))
+    tracked_closures = lane_stats.get("closed", 0)
+    paper_pnl = lane_stats.get("pnl", 0.0)
+    matched_alerts = lane_stats.get("matched_alerts", 0)
+    paper_entries = lane_stats.get("paper_entries", 0)
 
     rows = []
     for alert in reversed(alerts[-5:]):
@@ -547,7 +580,7 @@ def _style_card(style, state):
     last_sent = "Sent" if last.get("discord_sent") else "Pending"
     position_symbol = escape(str(open_position.get("symbol") or "None"))
     position_side = escape(str(open_position.get("side") or "N/A"))
-    position_entry = escape(_fmt(open_position.get("entry_price")))
+    position_entry = escape(_fmt(open_position.get("entry_underlying_price", open_position.get("entry_price"))))
     position_stop = escape(_fmt(open_position.get("stop")))
     position_tp1 = escape(_fmt(open_position.get("tp1")))
     option_symbol = escape(_fmt_contract(open_position.get("option_symbol")))
@@ -584,8 +617,8 @@ def _style_card(style, state):
       <div class="metrics">
         <div><span>Alerts</span><strong>{escape(str(stats.get("alerts_received", 0)))}</strong></div>
         <div><span>Sent</span><strong>{escape(str(stats.get("discord_sent", 0)))}</strong></div>
-        <div><span>Wins</span><strong>{escape(str(stats.get("wins", 0)))}</strong></div>
-        <div><span>Losses</span><strong>{escape(str(stats.get("losses", 0)))}</strong></div>
+        <div><span>Matched</span><strong>{matched_alerts}</strong></div>
+        <div><span>Entered</span><strong>{paper_entries}</strong></div>
       </div>
 
       <div class="strip">
@@ -596,13 +629,13 @@ def _style_card(style, state):
 
       <div class="strip">
         <div><span>Tracked Closures</span><strong>{tracked_closures}</strong></div>
-        <div><span>Contract Source</span><strong>{pricing_badge}</strong></div>
+        <div><span>Paper P&amp;L</span><strong class="{_pnl_class(paper_pnl)}">{escape(_fmt_money(paper_pnl))}</strong></div>
         <div><span>Status</span><strong class="{status_class}">{position_status}</strong></div>
       </div>
       {webhook_error_block}
 
       <div class="position">
-        <div class="section-title">Open Position / Contract Idea</div>
+        <div class="section-title">Open Paper Position</div>
         <div class="position-grid">
           <div><span>Symbol</span><strong>{position_symbol}</strong></div>
           <div><span>Side</span><strong>{position_side}</strong></div>
@@ -714,24 +747,19 @@ def _include_dashboard_position(item):
 def _has_real_contract_reference(item):
     if not item:
         return False
-
     symbol = str(item.get("symbol") or "").strip().upper()
     if not symbol or symbol in DASHBOARD_HIDDEN_SYMBOLS:
         return False
-
     if not item.get("option_symbol"):
         return False
-
     contract_price = item.get("contract_price")
     if contract_price in (None, ""):
         contract_price = item.get("entry_contract_price")
     if contract_price in (None, "", 0):
         return False
-
     pricing_source = str(item.get("pricing_source") or "").strip().lower()
     if pricing_source == "estimated":
         return False
-
     return True
 
 
@@ -800,6 +828,47 @@ def _leaderboard(alerts, closed_positions):
     return rows
 
 
+def _lane_analytics(alerts, open_positions, closed_positions):
+    lanes = {}
+    for style in ("LOTTO", "SWING"):
+        lane_alerts = [item for item in alerts if str(item.get("trade_style") or "").upper() == style]
+        lane_closed = [item for item in closed_positions if str(item.get("style") or item.get("trade_style") or "").upper() == style]
+        lane_open = [item for item in open_positions if str(item.get("style") or item.get("trade_style") or "").upper() == style]
+        wins = sum(1 for item in lane_closed if (_trade_pnl(item) or 0) > 0)
+        losses = sum(1 for item in lane_closed if (_trade_pnl(item) or 0) <= 0)
+        matched = sum(1 for item in lane_alerts if _has_real_contract_reference(item))
+        pnl = round(sum(float(_trade_pnl(item) or 0.0) for item in lane_closed), 2)
+        lanes[style] = {
+            "style": style,
+            "alerts": len(lane_alerts),
+            "matched_alerts": matched,
+            "paper_entries": len(lane_open) + len(lane_closed),
+            "open": len(lane_open),
+            "closed": len(lane_closed),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round((wins / len(lane_closed)) * 100, 2) if lane_closed else None,
+            "pnl": pnl,
+            "open_position": lane_open[-1] if lane_open else None,
+        }
+    return lanes
+
+
+def _execution_funnel(alerts, open_positions, closed_positions):
+    alerts_total = len(alerts)
+    matched = sum(1 for item in alerts if _has_real_contract_reference(item))
+    discord_sent = sum(1 for item in alerts if item.get("discord_sent"))
+    entered = len(open_positions) + len(closed_positions)
+    return {
+        "alerts": alerts_total,
+        "matched": matched,
+        "discord_sent": discord_sent,
+        "paper_entered": entered,
+        "match_rate": _rate(matched, alerts_total),
+        "paper_entry_rate": _rate(entered, matched),
+    }
+
+
 def _risk_snapshot(states, alerts, closed_positions):
     today = _summary_window(alerts, closed_positions, timedelta(days=1))
     recent_alerts = _summary_window(alerts, closed_positions, timedelta(hours=1))["alerts"]
@@ -830,6 +899,12 @@ def _risk_snapshot(states, alerts, closed_positions):
         "today_pnl": today["pnl"],
         "note": note,
     }
+
+
+def _rate(numerator, denominator):
+    if not denominator:
+        return None
+    return round((float(numerator) / float(denominator)) * 100, 2)
 
 
 def _health_snapshot(config, states, webhook_base_url=None):
@@ -948,6 +1023,23 @@ def _leaderboard_row(item):
       <div>{item['alerts']}</div>
       <div>{item['closed']}</div>
       <div><strong class="{_pnl_class(item['pnl'])}">{escape(_fmt_money(item['pnl']))}</strong></div>
+    </div>
+    """
+
+
+def _lane_analytics_row(item):
+    label = item.get("style") or "N/A"
+    closed = item.get("closed", 0)
+    extra = f"{closed} closed • {escape(_fmt_pct(item.get('win_rate')))} WR"
+    return f"""
+    <div class="row">
+      <div>
+        <strong>{escape(label)}</strong>
+        <div class="alert-meta">{extra}</div>
+      </div>
+      <div>{item.get('alerts', 0)}</div>
+      <div>{closed}</div>
+      <div><strong class="{_pnl_class(item.get('pnl'))}">{escape(_fmt_money(item.get('pnl')))}</strong></div>
     </div>
     """
 
@@ -1231,16 +1323,6 @@ def _paper_section(paper):
         sign = "+" if v >= 0 else ""
         return f"{sign}${v:.2f}"
 
-    def fmt_return_pct(pnl, entry_price, contracts):
-        try:
-            cost_basis = float(entry_price) * 100 * max(int(contracts or 0), 1)
-            if cost_basis <= 0:
-                return ""
-            pct = (float(pnl) / cost_basis) * 100
-            return f"{pct:+.1f}%"
-        except (TypeError, ValueError, ZeroDivisionError):
-            return ""
-
     # ── Stat cards ───────────────────────────────────────────────────────
     stat_cards = f"""
         <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
@@ -1275,22 +1357,18 @@ def _paper_section(paper):
             sym         = escape(str(p.get("symbol", "")))
             side        = escape(str(p.get("side", "")))
             style       = escape(str(p.get("style", "")))
-            contracts   = p.get("contracts", 1)
             entry       = p.get("entry_contract_price") or 0
-            current     = p.get("current_contract_price") or entry
             unreal      = p.get("unrealized_pnl", 0.0) or 0.0
-            unreal_pct  = fmt_return_pct(unreal, entry, contracts)
-            unreal_pct_html = (
-                f'<span style="display:block;color:#666;font-size:10px;font-weight:500">{escape(unreal_pct)}</span>'
-                if unreal_pct
-                else ""
-            )
             opt_sym     = escape(str(p.get("option_symbol", "—")))
             tp          = p.get("tp")
             sl          = p.get("sl")
             entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
             underlying  = p.get("current_underlying_price")
             und_str     = f"${underlying:.2f}" if underlying else "—"
+            unreal_pct  = p.get("live_pnl_pct")
+            unreal_text = fmt_pnl(unreal)
+            if unreal_pct not in (None, ""):
+                unreal_text = f"{unreal_text}<div style='font-size:10px;color:#777'>{_fmt_pct(unreal_pct)}</div>"
 
             open_rows += f"""
               <div style="display:grid;grid-template-columns:80px 60px 60px 1fr 70px 70px 80px 80px 80px;
@@ -1306,7 +1384,7 @@ def _paper_section(paper):
                 <span>${entry:.2f}</span>
                 <span>{und_str}</span>
                 <span>TP: {f"${float(tp):.2f}" if tp else "—"} / SL: {f"${float(sl):.2f}" if sl else "—"}</span>
-                <span style="color:{pnl_color(unreal)};font-weight:600">{fmt_pnl(unreal)}{unreal_pct_html}</span>
+                <span style="color:{pnl_color(unreal)};font-weight:600">{unreal_text}</span>
                 <span style="color:#666">{entered}</span>
               </div>"""
 
@@ -1342,16 +1420,18 @@ def _paper_section(paper):
             style   = escape(str(p.get("style", "")))
             entry   = p.get("entry_contract_price") or 0
             exit_px = p.get("exit_contract_price")
-            contracts = p.get("contracts", 1)
             rpnl    = p.get("realized_pnl", 0.0) or 0.0
-            realized_pct = fmt_return_pct(rpnl, entry, contracts)
-            realized_pct_html = (
-                f'<span style="display:block;color:#666;font-size:10px;font-weight:500">{escape(realized_pct)}</span>'
-                if realized_pct
-                else ""
-            )
+            pct     = None
+            if entry:
+                try:
+                    pct = round(((float(exit_px) - float(entry)) / float(entry)) * 100, 2) if exit_px is not None else None
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pct = None
             reason  = escape(str(p.get("exit_reason", "—")))
             closed_at = str(p.get("closed_at", ""))[:16].replace("T", " ")
+            pnl_text = fmt_pnl(rpnl)
+            if pct not in (None, ""):
+                pnl_text = f"{pnl_text}<div style='font-size:10px;color:#777'>{_fmt_pct(pct)}</div>"
 
             closed_rows += f"""
               <div style="display:grid;grid-template-columns:80px 60px 60px 70px 70px 1fr 90px 100px;
@@ -1366,7 +1446,7 @@ def _paper_section(paper):
                 <span>${entry:.2f}</span>
                 <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
                 <span style="color:#aaa;font-size:11px">{reason}</span>
-                <span style="color:{pnl_color(rpnl)};font-weight:600">{fmt_pnl(rpnl)}{realized_pct_html}</span>
+                <span style="color:{pnl_color(rpnl)};font-weight:600">{pnl_text}</span>
                 <span style="color:#555;font-size:11px">{closed_at}</span>
               </div>"""
 

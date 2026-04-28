@@ -8,9 +8,10 @@ A fresh TradingView-to-Discord alert system with hard `LOTTO` and `SWING` separa
 - Keeps `LOTTO` and `SWING` in separate lanes
 - Sends each style to its own Discord webhook
 - Writes separate JSON state and CSV logs per style
-- Shows a simple dashboard in the browser
-- Can pull real options contracts and snapshots from Polygon, with Alpaca as fallback
-- Shows contract-based paper P&L on the dashboard when live option pricing is available
+- Shows a browser dashboard with alert flow, paper-trade results, and lane analytics
+- Pulls real options contracts and premiums from Alpaca for LOTTO/SWING contract matching
+- Runs paper trading on Alpaca Paper with auto monitoring and end-of-day closes
+- Supports an options flow scanner and Discord-posted sector heatmap
 
 ## Files
 
@@ -25,16 +26,16 @@ A fresh TradingView-to-Discord alert system with hard `LOTTO` and `SWING` separa
 
 1. Copy `.env.example` to `.env`
 2. Fill in your Discord webhook URLs and webhook secret
-3. Add `POLYGON_API_KEY` if you want Polygon-backed contract data
-4. Optionally add Alpaca keys as a fallback source
-3. Run:
+3. Add Alpaca API keys for contract matching and paper trading
+4. Optionally add Tastytrade credentials for the options flow scanner
+5. Run:
 
 ```bash
 cd /Users/stevengonzalez/Documents/Codex/2026-04-20-fix-my-codes-and-make-them/gainzalgo_monster
 python3 app.py
 ```
 
-4. Open:
+6. Open:
 
 ```text
 http://localhost:8787/dashboard
@@ -85,10 +86,7 @@ See [HOSTING.md](/Users/stevengonzalez/Documents/Codex/2026-04-20-fix-my-codes-a
 
 ## Reliable Contract Data
 
-When a Polygon key is present, Monster uses Polygon's options endpoints first for:
-
-- contract discovery via `/v3/reference/options/contracts`
-- option chain snapshots via `/v3/snapshot/options/{underlying}`
+Monster now uses Alpaca as the live contract-matching path for LOTTO and SWING.
 
 That lets the alert show:
 
@@ -96,7 +94,12 @@ That lets the alert show:
 - exact expiry
 - exact strike
 - live contract premium
-- max qty based on your configured budget
+- paper-trade sizing from your configured risk budget
 
-If Polygon is missing but Alpaca keys are present, Monster falls back to Alpaca.
-If neither is configured, Monster falls back to estimated contract info so the app still runs.
+If Alpaca is missing or no valid contract is found, the trade plan can fall back to an estimated contract idea internally, but production Discord delivery should be restricted to real matched contracts.
+
+## Extra Modules
+
+- `/flow-scan` runs the Tastytrade unusual-options-flow scanner
+- `/heatmap` generates and posts a Discord sector heatmap
+- the dashboard includes a paper ledger, execution funnel, and lane analytics
