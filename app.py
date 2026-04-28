@@ -22,6 +22,59 @@ config = load_config()
 STATE_LOCK = threading.Lock()
 
 
+def _health_payload(request_base_url=None):
+    styles = config.get("styles") or {}
+    alpaca = config.get("alpaca") or {}
+    flow = config.get("flow") or {}
+    heatmap = config.get("heatmap") or {}
+    public_base = request_base_url or config.get("public_base_url") or ""
+    webhook_url = f"{public_base.rstrip('/')}/webhook/tradingview" if public_base else None
+    return {
+        "ok": True,
+        "styles": list(styles.keys()),
+        "dashboard": "/dashboard",
+        "paper_trading_enabled": bool(config.get("paper_trading_enabled", True)),
+        "modules": {
+            "discord_alerts": {
+                "ready": bool(styles.get("LOTTO", {}).get("discord_webhook") and styles.get("SWING", {}).get("discord_webhook"))
+            },
+            "alpaca": {
+                "ready": bool(alpaca.get("api_key") and alpaca.get("secret_key")),
+                "options_feed": alpaca.get("options_feed"),
+                "trading_base_url": alpaca.get("trading_base_url"),
+            },
+            "options_flow": {
+                "enabled": bool(flow.get("enabled", True)),
+                "ready": bool(
+                    flow.get("enabled", True)
+                    and flow.get("tastytrade_username")
+                    and flow.get("tastytrade_password")
+                    and flow.get("bull_webhook")
+                    and flow.get("bear_webhook")
+                ),
+            },
+            "heatmap": {
+                "enabled": bool(heatmap.get("enabled", True)),
+                "ready": bool(heatmap.get("enabled", True) and heatmap.get("discord_webhook")),
+            },
+        },
+        "webhook_url": webhook_url,
+    }
+
+
+def _run_heatmap_async():
+    """Background thread target for /heatmap endpoint."""
+    try:
+        from monster.market_heatmap import post_market_heatmap
+        import logging
+        logging.getLogger(__name__).info("Market heatmap generation started")
+        success = post_market_heatmap()
+        logging.getLogger(__name__).info("Market heatmap %s", "posted" if success else "failed")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(f"Market heatmap error: {exc}")
+
+
 def _run_flow_scan_async():
     """Background thread target for /flow-scan endpoint."""
     try:
@@ -95,15 +148,11 @@ class MonsterHandler(BaseHTTPRequestHandler):
         if route_path == "/flow-scan":
             return self._handle_flow_scan()
 
+        if route_path == "/heatmap":
+            return self._handle_heatmap()
+
         if route_path == "/health":
-            return self._json(
-                200,
-                {
-                    "ok": True,
-                    "styles": list(config["styles"].keys()),
-                    "dashboard": "/dashboard",
-                },
-            )
+            return self._json(200, _health_payload(self._public_base_url()))
 
         if route_path == "/dashboard":
             html = render_dashboard(config, self._public_base_url())
@@ -170,6 +219,28 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
         self._json(202, {"accepted": True, "scanning": True, "symbols": len(WATCHLIST)})
         worker = threading.Thread(target=_run_flow_scan_async, daemon=True)
+        worker.start()
+
+    def _handle_heatmap(self):
+        """
+        GET /heatmap?secret=<HEATMAP_SECRET>
+        Returns 202 immediately and generates + posts the heatmap in a background thread.
+        Schedule with UptimeRobot at 9:35 AM EST Mon-Fri for daily open snapshot.
+        """
+        heatmap_cfg = config.get("heatmap", {})
+        secret = heatmap_cfg.get("secret", "")
+        if secret:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            provided = qs.get("secret", [""])[0]
+            if provided != secret:
+                return self._json(401, {"error": "invalid heatmap secret"})
+
+        if not heatmap_cfg.get("enabled", True):
+            return self._json(200, {"ok": False, "reason": "heatmap disabled (HEATMAP_ENABLED=false)"})
+
+        self._json(202, {"accepted": True, "generating": True})
+        worker = threading.Thread(target=_run_heatmap_async, daemon=True)
         worker.start()
 
     def _handle_position_action(self):

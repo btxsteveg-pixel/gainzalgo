@@ -37,6 +37,7 @@ def render_dashboard(config, public_base_url=None):
     lane_analytics = _lane_analytics(alerts, paper_open_positions, paper_closed_positions)
     execution_funnel = _execution_funnel(alerts, paper_open_positions, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
+    ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
     health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
 
@@ -478,6 +479,16 @@ def render_dashboard(config, public_base_url=None):
           </section>
         </section>
 
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="section-title">Ops Center</div>
+          <div class="table leader-table">
+            <div class="table-head">
+              <span>Module</span><span>Status</span><span>Detail</span><span>Last Seen</span>
+            </div>
+            {ops_rows}
+          </div>
+        </section>
+
         <section class="layout">
           <section class="panel">
             <div class="section-title">Execution Funnel</div>
@@ -590,7 +601,6 @@ def _style_card(style, state, lane_stats):
     position_status = escape(str(open_position.get("status") or "N/A"))
     status_class = _status_class(open_position.get("status"))
     style_class = style.lower()
-    controls = _status_controls(style, open_position)
     webhook_error_block = ""
     error_symbol = str(last_webhook_error.get("symbol") or "").strip().upper()
     if last_webhook_error.get("message") and error_symbol not in DASHBOARD_HIDDEN_SYMBOLS:
@@ -648,7 +658,6 @@ def _style_card(style, state, lane_stats):
           <div><span>Source</span><strong>{pricing_badge}</strong></div>
           <div><span>Live P&amp;L %</span><strong class="{_pnl_class(open_position.get('live_pnl'))}">{escape(_fmt_pct(open_position.get("live_pnl_pct")))}</strong></div>
         </div>
-        {controls}
       </div>
 
       <div class="section-title">Recent Tape</div>
@@ -869,6 +878,56 @@ def _execution_funnel(alerts, open_positions, closed_positions):
     }
 
 
+def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_error, webhook_base_url):
+    last_alert_time = alerts[-1].get("time") if alerts else None
+    last_closed_time = closed_positions[-1].get("closed_at") if closed_positions else None
+    rows = [
+        _ops_row(
+            "TradingView Webhook",
+            "LIVE" if webhook_base_url else "OFFLINE",
+            "Hosted route ready" if webhook_base_url else "No public webhook route",
+            last_alert_time,
+        ),
+        _ops_row(
+            "Discord Alerts",
+            "LIVE" if _discord_ready(config) else "BLOCKED",
+            _discord_detail(config),
+            last_alert_time,
+        ),
+        _ops_row(
+            "Alpaca Contracts",
+            "LIVE" if _alpaca_ready(config) else "BLOCKED",
+            "Contract matching + live contract marks" if _alpaca_ready(config) else "Missing Alpaca API keys",
+            last_alert_time,
+        ),
+        _ops_row(
+            "Paper Trader",
+            "LIVE" if config.get("paper_trading_enabled", True) else "OFF",
+            f"{len(open_positions)} open / {len(closed_positions)} closed",
+            last_closed_time,
+        ),
+        _ops_row(
+            "Options Flow",
+            "LIVE" if _flow_ready(config) else "BLOCKED",
+            _flow_detail(config),
+            None,
+        ),
+        _ops_row(
+            "Heatmap",
+            "LIVE" if _heatmap_ready(config) else "BLOCKED",
+            _heatmap_detail(config),
+            None,
+        ),
+        _ops_row(
+            "Reject Monitor",
+            "WATCHING" if latest_error else "CLEAR",
+            latest_error.get("message") if latest_error else "No recent webhook rejects",
+            latest_error.get("time") if latest_error else None,
+        ),
+    ]
+    return "".join(rows)
+
+
 def _risk_snapshot(states, alerts, closed_positions):
     today = _summary_window(alerts, closed_positions, timedelta(days=1))
     recent_alerts = _summary_window(alerts, closed_positions, timedelta(hours=1))["alerts"]
@@ -1048,6 +1107,26 @@ def _chip(label, tone):
     return f"<span class='chip {tone}'>{escape(label)}</span>"
 
 
+def _ops_row(module, status, detail, last_seen):
+    return f"""
+    <div class="row">
+      <div><strong>{escape(module)}</strong></div>
+      <div><span class="chip {_ops_tone(status)}">{escape(status)}</span></div>
+      <div>{escape(str(detail or 'N/A'))}</div>
+      <div>{escape(_short_time(last_seen))}</div>
+    </div>
+    """
+
+
+def _ops_tone(status):
+    label = str(status or "").upper()
+    if label in {"LIVE", "CLEAR"}:
+        return "good"
+    if label in {"WATCHING", "OFF"}:
+        return "warn"
+    return "bad"
+
+
 def _latest_discord_alert(alerts):
     sent_alerts = [alert for alert in alerts if alert.get("discord_sent")]
     return sent_alerts[-1] if sent_alerts else None
@@ -1161,6 +1240,63 @@ def _pricing_badge(open_position):
     if open_position.get("option_symbol"):
         return "Contract Idea"
     return "N/A"
+
+
+def _discord_ready(config):
+    styles = config.get("styles") or {}
+    return all((styles.get(style) or {}).get("discord_webhook") for style in ("LOTTO", "SWING"))
+
+
+def _discord_detail(config):
+    styles = config.get("styles") or {}
+    missing = [style for style in ("LOTTO", "SWING") if not (styles.get(style) or {}).get("discord_webhook")]
+    if not missing:
+        return "LOTTO + SWING webhooks armed"
+    return "Missing webhooks: " + ", ".join(missing)
+
+
+def _alpaca_ready(config):
+    alpaca = config.get("alpaca") or {}
+    return bool(alpaca.get("api_key") and alpaca.get("secret_key"))
+
+
+def _flow_ready(config):
+    flow = config.get("flow") or {}
+    return bool(
+        flow.get("enabled")
+        and flow.get("tastytrade_username")
+        and flow.get("tastytrade_password")
+        and flow.get("bull_webhook")
+        and flow.get("bear_webhook")
+    )
+
+
+def _flow_detail(config):
+    flow = config.get("flow") or {}
+    if not flow.get("enabled"):
+        return "Flow scanner disabled"
+    missing = []
+    if not flow.get("tastytrade_username") or not flow.get("tastytrade_password"):
+        missing.append("Tastytrade auth")
+    if not flow.get("bull_webhook") or not flow.get("bear_webhook"):
+        missing.append("Bull/Bear webhooks")
+    if not missing:
+        return "Scanner configured with bull/bear routes"
+    return "Missing: " + ", ".join(missing)
+
+
+def _heatmap_ready(config):
+    heatmap = config.get("heatmap") or {}
+    return bool(heatmap.get("enabled") and heatmap.get("discord_webhook"))
+
+
+def _heatmap_detail(config):
+    heatmap = config.get("heatmap") or {}
+    if not heatmap.get("enabled"):
+        return "Heatmap disabled"
+    if not heatmap.get("discord_webhook"):
+        return "Discord webhook missing"
+    return "Discord heatmap posting armed"
 
 
 def _status_controls(style, open_position):
