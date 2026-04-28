@@ -38,6 +38,7 @@ def render_dashboard(config, public_base_url=None):
     execution_funnel = _execution_funnel(alerts, paper_open_positions, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
+    settings_rows = _settings_rows(config)
     health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
 
@@ -489,6 +490,16 @@ def render_dashboard(config, public_base_url=None):
           </div>
         </section>
 
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="section-title">Live Settings Snapshot</div>
+          <div class="table leader-table">
+            <div class="table-head">
+              <span>Area</span><span>Setting</span><span>Value</span><span>Purpose</span>
+            </div>
+            {settings_rows}
+          </div>
+        </section>
+
         <section class="layout">
           <section class="panel">
             <div class="section-title">Execution Funnel</div>
@@ -559,13 +570,14 @@ def _style_card(style, state, lane_stats):
     alerts = state.get("recent_alerts", [])
     last = state.get("last_alert") or {}
     open_position = dict(lane_stats.get("open_position") or {})
-    stats = state.get("stats") or {}
     last_webhook_error = state.get("last_webhook_error") or {}
     win_rate = _fmt_pct(lane_stats.get("win_rate"))
     tracked_closures = lane_stats.get("closed", 0)
     paper_pnl = lane_stats.get("pnl", 0.0)
     matched_alerts = lane_stats.get("matched_alerts", 0)
     paper_entries = lane_stats.get("paper_entries", 0)
+    sent_alerts = lane_stats.get("discord_sent", 0)
+    total_alerts = lane_stats.get("alerts", 0)
 
     rows = []
     for alert in reversed(alerts[-5:]):
@@ -625,8 +637,8 @@ def _style_card(style, state, lane_stats):
       </div>
 
       <div class="metrics">
-        <div><span>Alerts</span><strong>{escape(str(stats.get("alerts_received", 0)))}</strong></div>
-        <div><span>Sent</span><strong>{escape(str(stats.get("discord_sent", 0)))}</strong></div>
+        <div><span>Alerts</span><strong>{total_alerts}</strong></div>
+        <div><span>Sent</span><strong>{sent_alerts}</strong></div>
         <div><span>Matched</span><strong>{matched_alerts}</strong></div>
         <div><span>Entered</span><strong>{paper_entries}</strong></div>
       </div>
@@ -843,6 +855,7 @@ def _lane_analytics(alerts, open_positions, closed_positions):
         lane_alerts = [item for item in alerts if str(item.get("trade_style") or "").upper() == style]
         lane_closed = [item for item in closed_positions if str(item.get("style") or item.get("trade_style") or "").upper() == style]
         lane_open = [item for item in open_positions if str(item.get("style") or item.get("trade_style") or "").upper() == style]
+        lane_sent = sum(1 for item in lane_alerts if item.get("discord_sent"))
         wins = sum(1 for item in lane_closed if (_trade_pnl(item) or 0) > 0)
         losses = sum(1 for item in lane_closed if (_trade_pnl(item) or 0) <= 0)
         matched = sum(1 for item in lane_alerts if _has_real_contract_reference(item))
@@ -850,6 +863,7 @@ def _lane_analytics(alerts, open_positions, closed_positions):
         lanes[style] = {
             "style": style,
             "alerts": len(lane_alerts),
+            "discord_sent": lane_sent,
             "matched_alerts": matched,
             "paper_entries": len(lane_open) + len(lane_closed),
             "open": len(lane_open),
@@ -924,6 +938,24 @@ def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_er
             latest_error.get("message") if latest_error else "No recent webhook rejects",
             latest_error.get("time") if latest_error else None,
         ),
+    ]
+    return "".join(rows)
+
+
+def _settings_rows(config):
+    flow = config.get("flow") or {}
+    styles = config.get("styles") or {}
+    rows = [
+        _settings_row("LOTTO", "Confidence Floor", _fmt(styles.get("LOTTO", {}).get("min_confidence")), "Minimum score before a LOTTO alert is accepted"),
+        _settings_row("LOTTO", "DTE Window", _dte_window(styles.get("LOTTO", {})), "Target expiry band for contract matching"),
+        _settings_row("LOTTO", "Risk %", _fmt_pct(styles.get("LOTTO", {}).get("risk_pct")), "Paper-account sizing per trade"),
+        _settings_row("SWING", "Confidence Floor", _fmt(styles.get("SWING", {}).get("min_confidence")), "Minimum score before a SWING alert is accepted"),
+        _settings_row("SWING", "DTE Window", _dte_window(styles.get("SWING", {})), "Target expiry band for swing contracts"),
+        _settings_row("SWING", "Risk %", _fmt_pct(styles.get("SWING", {}).get("risk_pct")), "Paper-account sizing per trade"),
+        _settings_row("SWING", "Trail Stop", _fmt_pct(styles.get("SWING", {}).get("trailing_stop_pct")), "Trailing stop after TP1 when enabled"),
+        _settings_row("FLOW", "Min Premium", _fmt_money(flow.get("min_premium")), "Minimum unusual-flow premium to qualify"),
+        _settings_row("FLOW", "Max DTE", str(flow.get("max_dte", "N/A")), "Maximum expiry distance for flow candidates"),
+        _settings_row("SYSTEM", "Paper Account", _fmt_money(config.get("paper_account_size")), "Hosted paper account size for sizing and P&L"),
     ]
     return "".join(rows)
 
@@ -1118,6 +1150,17 @@ def _ops_row(module, status, detail, last_seen):
     """
 
 
+def _settings_row(area, setting, value, purpose):
+    return f"""
+    <div class="row">
+      <div><strong>{escape(str(area))}</strong></div>
+      <div>{escape(str(setting))}</div>
+      <div>{escape(str(value))}</div>
+      <div>{escape(str(purpose))}</div>
+    </div>
+    """
+
+
 def _ops_tone(status):
     label = str(status or "").upper()
     if label in {"LIVE", "CLEAR"}:
@@ -1125,6 +1168,12 @@ def _ops_tone(status):
     if label in {"WATCHING", "OFF"}:
         return "warn"
     return "bad"
+
+
+def _dte_window(style_cfg):
+    if not style_cfg:
+        return "N/A"
+    return f"{style_cfg.get('dte_min', 'N/A')}-{style_cfg.get('dte_max', 'N/A')} days"
 
 
 def _latest_discord_alert(alerts):
