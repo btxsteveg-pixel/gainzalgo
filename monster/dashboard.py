@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 import re
 
-from monster.options_data import attach_live_pnl
+from monster.options_data import attach_live_pnl, alpaca_enabled, fetch_stock_snapshots, _extract_stock_price
 from monster.store import load_all_states
 try:
     from monster.paper_trader import get_paper_summary
@@ -39,6 +39,7 @@ def render_dashboard(config, public_base_url=None):
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
     settings_rows = _settings_rows(config)
+    premarket = _premarket_advisory(config)
     audit_rows = _alert_audit_rows(states, paper_open_positions, paper_closed_positions)
     swing_monitor = _swing_trigger_monitor(states, paper_open_positions, paper_closed_positions)
     health = _health_snapshot(config, display_states, webhook_base_url)
@@ -356,6 +357,9 @@ def render_dashboard(config, public_base_url=None):
         .reject-table .table-head, .reject-table .row {{
           grid-template-columns: minmax(0, 1.6fr) minmax(72px, .7fr) minmax(96px, .8fr);
         }}
+        .scanner-table .table-head, .scanner-table .row {{
+          grid-template-columns: minmax(0, 1.2fr) minmax(72px, .7fr) minmax(72px, .7fr) minmax(96px, .8fr) minmax(0, 1fr);
+        }}
         .alert-meta, .muted {{
           color: #c1a6ab;
           font-size: 12px;
@@ -430,7 +434,8 @@ def render_dashboard(config, public_base_url=None):
           .leader-table .table-head, .leader-table .row,
           .audit-table .table-head, .audit-table .row,
           .monitor-symbol-table .table-head, .monitor-symbol-table .row,
-          .reject-table .table-head, .reject-table .row {{
+          .reject-table .table-head, .reject-table .row,
+          .scanner-table .table-head, .scanner-table .row {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
         }}
@@ -521,6 +526,30 @@ def render_dashboard(config, public_base_url=None):
               <span>Area</span><span>Setting</span><span>Value</span><span>Purpose</span>
             </div>
             {settings_rows}
+          </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="card-head" style="margin-bottom:10px;">
+            <div class="section-title" style="margin-bottom:0;">Premarket Advisory</div>
+            <div class="muted">Advisory only • this does not filter LOTTO or SWING alerts</div>
+          </div>
+          <div class="hero-grid" style="margin-bottom:14px;">
+            <div class="grid-stat"><span>Universe</span><strong>{premarket['universe_count']}</strong></div>
+            <div class="grid-stat"><span>Gap Up</span><strong>{premarket['gap_up_count']}</strong></div>
+            <div class="grid-stat"><span>Gap Down</span><strong>{premarket['gap_down_count']}</strong></div>
+            <div class="grid-stat"><span>Hot Tape</span><strong>{premarket['hot_tape_count']}</strong></div>
+          </div>
+          <div class="strip">
+            <div><span>LOTTO Watch</span><strong>{escape(premarket['lotto_watch'])}</strong></div>
+            <div><span>SWING Watch</span><strong>{escape(premarket['swing_watch'])}</strong></div>
+            <div><span>Desk Note</span><strong>{escape(premarket['note'])}</strong></div>
+          </div>
+          <div class="table scanner-table" style="margin-top:14px;">
+            <div class="table-head">
+              <span>Symbol</span><span>Last</span><span>Gap</span><span>Volume</span><span>Lane Fit</span>
+            </div>
+            {premarket['rows']}
           </div>
         </section>
 
@@ -1123,6 +1152,169 @@ def _swing_reject_rows(errors):
             """
         )
     return "".join(rows)
+
+
+def _premarket_advisory(config):
+    records = []
+    symbols = [
+        symbol for symbol in (config.get("allowed_symbols") or [])
+        if symbol not in DASHBOARD_HIDDEN_SYMBOLS
+    ][:40]
+    if alpaca_enabled(config) and symbols:
+        try:
+            snapshots = fetch_stock_snapshots(config, symbols)
+        except Exception:
+            snapshots = {}
+        for symbol in symbols:
+            item = _premarket_record(symbol, (snapshots or {}).get(symbol) or {})
+            if item:
+                records.append(item)
+
+    movers = sorted(
+        records,
+        key=lambda item: (
+            abs(item.get("gap_pct") or 0.0),
+            item.get("dollar_volume") or 0.0,
+            item.get("volume") or 0,
+        ),
+        reverse=True,
+    )[:10]
+    rows = "".join(_premarket_row(item) for item in movers) or (
+        "<div class='empty'>Premarket advisory needs Alpaca stock snapshots and fresh market data.</div>"
+    )
+
+    lotto_candidates = sorted(
+        [item for item in records if item.get("lotto_score", 0) >= 2],
+        key=lambda item: (
+            item.get("lotto_score", 0),
+            abs(item.get("gap_pct") or 0.0),
+            item.get("dollar_volume") or 0.0,
+        ),
+        reverse=True,
+    )[:5]
+    swing_candidates = sorted(
+        [item for item in records if item.get("swing_score", 0) >= 2],
+        key=lambda item: (
+            item.get("swing_score", 0),
+            item.get("dollar_volume") or 0.0,
+            abs(item.get("gap_pct") or 0.0),
+        ),
+        reverse=True,
+    )[:5]
+
+    hot_tape_count = sum(
+        1 for item in records
+        if abs(item.get("gap_pct") or 0.0) >= 1.0 and (item.get("volume") or 0) >= 250000
+    )
+    gap_up_count = sum(1 for item in records if (item.get("gap_pct") or 0.0) >= 1.0)
+    gap_down_count = sum(1 for item in records if (item.get("gap_pct") or 0.0) <= -1.0)
+
+    note = "No live advisory data yet."
+    if records:
+        if hot_tape_count >= 8:
+            note = "Tape is active. Let the scanner narrow the watchlist, not the trigger logic."
+        elif hot_tape_count >= 4:
+            note = "Decent motion on the board. Focus on clean names with real participation."
+        else:
+            note = "Quiet tape. Favor selectivity over forcing fresh names."
+
+    return {
+        "universe_count": len(records),
+        "gap_up_count": gap_up_count,
+        "gap_down_count": gap_down_count,
+        "hot_tape_count": hot_tape_count,
+        "lotto_watch": _watch_text(lotto_candidates),
+        "swing_watch": _watch_text(swing_candidates),
+        "note": note,
+        "rows": rows,
+    }
+
+
+def _premarket_record(symbol, snapshot):
+    price = _extract_stock_price(snapshot)
+    if price in (None, 0):
+        return None
+
+    prev_daily = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+    prev_close = _safe_float(prev_daily.get("c") if "c" in prev_daily else prev_daily.get("close"))
+    if prev_close in (None, 0):
+        return None
+
+    daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+    minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+    volume = _safe_int(daily_bar.get("v") if "v" in daily_bar else daily_bar.get("volume")) or 0
+    minute_volume = _safe_int(minute_bar.get("v") if "v" in minute_bar else minute_bar.get("volume")) or 0
+    gap_pct = round(((float(price) - float(prev_close)) / float(prev_close)) * 100.0, 2)
+    dollar_volume = round(float(price) * float(volume), 2) if volume else 0.0
+
+    lotto_score = 0
+    if abs(gap_pct) >= 1.25:
+        lotto_score += 1
+    if abs(gap_pct) >= 2.5:
+        lotto_score += 1
+    if volume >= 250000:
+        lotto_score += 1
+    if dollar_volume >= 15000000:
+        lotto_score += 1
+
+    swing_score = 0
+    if 0.75 <= abs(gap_pct) <= 4.5:
+        swing_score += 1
+    if volume >= 500000:
+        swing_score += 1
+    if dollar_volume >= 25000000:
+        swing_score += 1
+    if float(price) >= 20:
+        swing_score += 1
+
+    return {
+        "symbol": symbol,
+        "price": price,
+        "gap_pct": gap_pct,
+        "volume": volume,
+        "minute_volume": minute_volume,
+        "dollar_volume": dollar_volume,
+        "lotto_score": lotto_score,
+        "swing_score": swing_score,
+        "lane_fit": _lane_fit_label(lotto_score, swing_score),
+    }
+
+
+def _lane_fit_label(lotto_score, swing_score):
+    if lotto_score >= 3 and swing_score >= 3:
+        return "BOTH"
+    if lotto_score >= swing_score and lotto_score >= 2:
+        return "LOTTO"
+    if swing_score >= 2:
+        return "SWING"
+    return "WATCH"
+
+
+def _watch_text(items):
+    if not items:
+        return "Waiting on tape"
+    return " / ".join(item["symbol"] for item in items)
+
+
+def _premarket_row(item):
+    gap_pct = item.get("gap_pct")
+    gap_text = _fmt_signed_pct(gap_pct)
+    gap_class = _pnl_class(gap_pct)
+    lane_fit = item.get("lane_fit") or "WATCH"
+    volume_text = _fmt_compact_int(item.get("volume"))
+    note = f"Min { _fmt_compact_int(item.get('minute_volume')) } • ${_fmt_compact_int(item.get('dollar_volume'))} DV"
+    return f"""
+    <div class="row">
+      <div>
+        <div class="alert-symbol">{escape(str(item.get('symbol') or 'N/A'))}</div>
+        <div class="alert-meta">{escape(note)}</div>
+      </div>
+      <div>{escape(_fmt(item.get('price')))}</div>
+      <div><strong class="{gap_class}">{escape(gap_text)}</strong></div>
+      <div>{escape(volume_text)}</div>
+      <div><strong>{escape(lane_fit)}</strong><div class="audit-note">Advisory only</div></div>
+    </div>
+    """
 
 
 def _collect_alerts(states):
@@ -1827,6 +2019,50 @@ def _fmt_ratio_pct(value):
         return f"{float(value) * 100:.2f}%"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _fmt_signed_pct(value):
+    if value in (None, ""):
+        return "N/A"
+    try:
+        number = float(value)
+        return f"{number:+.2f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_compact_int(value):
+    if value in (None, ""):
+        return "N/A"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.1f}B"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.1f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}K"
+    return str(int(number))
+
+
+def _safe_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value):
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _fmt_timeframe(value):
