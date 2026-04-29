@@ -75,7 +75,7 @@ def load_config():
             "enabled": os.getenv("NEWS_RADAR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
             "refresh_seconds": int(os.getenv("NEWS_REFRESH_SECONDS", "90")),
             "benzinga_api_key": os.getenv("BENZINGA_NEWS_API_KEY", "").strip(),
-            "discord_webhook": os.getenv("NEWS_DISCORD_WEBHOOK", "").strip(),
+            "discord_webhook": os.getenv("NEWS_DISCORD_WEBHOOK", "").strip() or os.getenv("DISCORD_WEBHOOK_URL_NEWS", "").strip(),
             "scan_secret": os.getenv("NEWS_SCAN_SECRET", "").strip(),
         },
         "styles": {
