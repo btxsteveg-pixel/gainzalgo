@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 from monster.config import load_config
 from monster.dashboard import render_dashboard
 from monster.discord_sender import send_discord_alert
+from monster.news_radar import ensure_news_monitor_running, post_news_radar
 from monster.router import normalize_alert, build_trade_plan
 from monster.store import (
     append_alert_log,
@@ -19,6 +20,7 @@ from monster.store import (
 
 
 config = load_config()
+ensure_news_monitor_running(config)
 STATE_LOCK = threading.Lock()
 
 
@@ -27,6 +29,7 @@ def _health_payload(request_base_url=None):
     alpaca = config.get("alpaca") or {}
     flow = config.get("flow") or {}
     heatmap = config.get("heatmap") or {}
+    news = config.get("news") or {}
     public_base = request_base_url or config.get("public_base_url") or ""
     webhook_url = f"{public_base.rstrip('/')}/webhook/tradingview" if public_base else None
     return {
@@ -57,6 +60,11 @@ def _health_payload(request_base_url=None):
                 "enabled": bool(heatmap.get("enabled", True)),
                 "ready": bool(heatmap.get("enabled", True) and heatmap.get("discord_webhook")),
             },
+            "news_radar": {
+                "enabled": bool(news.get("enabled", True)),
+                "ready": bool(news.get("enabled", True) and news.get("discord_webhook")),
+                "premium": bool(news.get("benzinga_api_key")),
+            },
         },
         "webhook_url": webhook_url,
     }
@@ -86,6 +94,20 @@ def _run_flow_scan_async():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).error(f"Options flow scan error: {exc}")
+
+
+def _run_news_scan_async():
+    try:
+        import logging
+        result = post_news_radar(config)
+        logging.getLogger(__name__).info(
+            "News radar scan complete — posted=%s reason=%s",
+            result.get("posted"),
+            result.get("reason"),
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error(f"News radar scan error: {exc}")
 
 
 def _process_alert_async(alert):
@@ -133,6 +155,8 @@ class MonsterHandler(BaseHTTPRequestHandler):
             return self._head_response(200, "application/json")
         if route_path == "/flow-scan":
             return self._head_response(200, "application/json")
+        if route_path == "/news-scan":
+            return self._head_response(200, "application/json")
         return self._head_response(404, "application/json")
 
     def do_GET(self):
@@ -147,6 +171,9 @@ class MonsterHandler(BaseHTTPRequestHandler):
         # Set up UptimeRobot or cron to hit this every 5-10 min during market hours.
         if route_path == "/flow-scan":
             return self._handle_flow_scan()
+
+        if route_path == "/news-scan":
+            return self._handle_news_scan()
 
         if route_path == "/heatmap":
             return self._handle_heatmap()
@@ -241,6 +268,25 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
         self._json(202, {"accepted": True, "generating": True})
         worker = threading.Thread(target=_run_heatmap_async, daemon=True)
+        worker.start()
+
+    def _handle_news_scan(self):
+        news_cfg = config.get("news", {})
+        secret = news_cfg.get("scan_secret", "")
+        if secret:
+            qs = parse_qs(urlparse(self.path).query)
+            provided = qs.get("secret", [""])[0]
+            if provided != secret:
+                return self._json(401, {"error": "invalid news scan secret"})
+
+        if not news_cfg.get("enabled", True):
+            return self._json(200, {"ok": False, "reason": "news radar disabled"})
+
+        if not news_cfg.get("discord_webhook"):
+            return self._json(200, {"ok": False, "reason": "news webhook not configured"})
+
+        self._json(202, {"accepted": True, "scanning": True})
+        worker = threading.Thread(target=_run_news_scan_async, daemon=True)
         worker.start()
 
     def _handle_position_action(self):

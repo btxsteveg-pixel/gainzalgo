@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import json
+from pathlib import Path
 import threading
+import time
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -32,6 +34,9 @@ RSS_FEEDS = [
 
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
+_MONITOR_THREAD = None
+_MONITOR_LOCK = threading.Lock()
+NEWS_STATE_FILENAME = "news_radar_state.json"
 
 
 def get_news_radar(config):
@@ -58,6 +63,50 @@ def get_news_radar(config):
             "payload": payload,
         }
     return payload
+
+
+def ensure_news_monitor_running(config):
+    global _MONITOR_THREAD
+    with _MONITOR_LOCK:
+        if _MONITOR_THREAD and _MONITOR_THREAD.is_alive():
+            return
+        _MONITOR_THREAD = threading.Thread(target=_news_monitor_loop, args=(config,), daemon=True)
+        _MONITOR_THREAD.start()
+
+
+def post_news_radar(config):
+    news_cfg = config.get("news") or {}
+    if not news_cfg.get("enabled", True):
+        return {"posted": 0, "reason": "disabled"}
+
+    webhook = str(news_cfg.get("discord_webhook") or "").strip()
+    if not webhook:
+        return {"posted": 0, "reason": "webhook_missing"}
+
+    payload = get_news_radar(config)
+    headlines = payload.get("rows") or []
+    state = _load_post_state(config)
+    posted_signatures = set(state.get("posted_signatures") or [])
+    to_post = []
+    for item in headlines:
+        signature = _headline_signature(item)
+        if not signature or signature in posted_signatures:
+            continue
+        if not _is_recent_headline(item.get("published_at")):
+            continue
+        to_post.append(item)
+
+    posted = 0
+    for item in to_post[:2]:
+        if _post_headline(webhook, item):
+            signature = _headline_signature(item)
+            posted_signatures.add(signature)
+            state["posted_signatures"] = list(posted_signatures)[-250:]
+            state["last_posted_at"] = datetime.now(timezone.utc).isoformat()
+            posted += 1
+
+    _save_post_state(config, state)
+    return {"posted": posted, "reason": "ok" if posted else "no_new_items"}
 
 
 def _build_payload(news_cfg):
@@ -114,6 +163,16 @@ def _empty_payload(note):
         "note": note,
         "rows": [],
     }
+
+
+def _news_monitor_loop(config):
+    while True:
+        try:
+            post_news_radar(config)
+        except Exception:
+            pass
+        refresh_seconds = max(30, int((config.get("news") or {}).get("refresh_seconds") or DEFAULT_REFRESH_SECONDS))
+        time.sleep(refresh_seconds)
 
 
 def _fetch_benzinga_news(api_key):
@@ -177,6 +236,97 @@ def _get_json(url):
             return json.loads(resp.read().decode("utf-8"))
     except (urllib_error.HTTPError, urllib_error.URLError, json.JSONDecodeError, TimeoutError):
         return {}
+
+
+def _headline_signature(item):
+    if not item:
+        return None
+    title = str(item.get("title") or "").strip()
+    link = str(item.get("link") or "").strip()
+    if not title or not link:
+        return None
+    return f"{title}|{link}"
+
+
+def _state_path(config):
+    return Path(config["data_dir"]) / NEWS_STATE_FILENAME
+
+
+def _load_post_state(config):
+    path = _state_path(config)
+    if not path.exists():
+        return {"posted_signatures": [], "last_posted_at": None}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {"posted_signatures": [], "last_posted_at": None}
+
+
+def _save_post_state(config, state):
+    try:
+        _state_path(config).write_text(json.dumps(state, indent=2))
+    except Exception:
+        pass
+
+
+def _is_recent_headline(value, max_age_hours=6):
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    return parsed >= cutoff
+
+
+def _parse_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _post_headline(webhook, item):
+    title = str(item.get("title") or "").strip()
+    link = str(item.get("link") or "").strip()
+    source = str(item.get("source") or "News")
+    published_at = _short_time(item.get("published_at"))
+    payload = {
+        "username": "GainzAlgo News",
+        "embeds": [
+            {
+                "author": {"name": "GainzAlgo Monster • News Radar"},
+                "title": title[:256],
+                "url": link,
+                "description": f"{source} • {published_at}",
+                "color": 0x4FC3F7,
+                "footer": {"text": "Official feeds" if item.get("mode") == "official" else "Premium feed"},
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(
+        webhook,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=10) as resp:
+            return 200 <= getattr(resp, "status", 204) < 300
+    except Exception:
+        return False
+
+
+def _short_time(value):
+    if not value:
+        return "Unknown time"
+    text = str(value).replace("T", " ")
+    return text[:16]
 
 
 def _node_text(node, tag):
