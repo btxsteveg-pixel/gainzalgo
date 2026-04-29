@@ -2211,6 +2211,33 @@ def _paper_section(paper):
         sign = "+" if v >= 0 else ""
         return f"{sign}${v:.2f}"
 
+    def contracts_for(item, *, closed=False):
+        keys = (
+            ("contracts_closed", "contracts_before_close", "initial_contracts", "contracts")
+            if closed
+            else ("contracts", "initial_contracts")
+        )
+        for key in keys:
+            value = item.get(key)
+            if value not in (None, ""):
+                try:
+                    return max(1, int(value))
+                except (TypeError, ValueError):
+                    continue
+        return 1
+
+    def deployed_capital(entry_price, contracts):
+        try:
+            return round(float(entry_price) * 100 * int(contracts), 2)
+        except (TypeError, ValueError):
+            return None
+
+    def one_contract_pnl(entry_price, mark_price):
+        try:
+            return round((float(mark_price) - float(entry_price)) * 100, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+
     def open_rows_for(items):
         if not items:
             return "<div style='color:#555;font-size:13px;padding:12px 0'>No open positions</div>"
@@ -2223,9 +2250,17 @@ def _paper_section(paper):
             opt_sym     = escape(str(p.get("option_symbol", "—")))
             entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
             unreal_pct  = p.get("live_pnl_pct")
+            contracts   = contracts_for(p)
+            deployed    = deployed_capital(entry, contracts)
+            one_lot     = one_contract_pnl(entry, p.get("current_contract_price"))
+            contract_meta = f"x{contracts}"
+            if deployed is not None:
+                contract_meta += f" · {_fmt_money(deployed)} deployed"
             unreal_text = fmt_pnl(unreal)
             if unreal_pct not in (None, ""):
                 unreal_text = f"{unreal_text}<div style='font-size:10px;color:#777'>{_fmt_pct(unreal_pct)}</div>"
+            if one_lot is not None:
+                unreal_text = f"{unreal_text}<div style='font-size:10px;color:#666'>1ct {fmt_pnl(one_lot)}</div>"
             rows += f"""
               <div style="display:grid;grid-template-columns:80px 60px 1fr 70px 90px 100px;
                           gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
@@ -2234,7 +2269,7 @@ def _paper_section(paper):
                 <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
                       color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
                       font-size:10px;font-weight:600">{side}</span>
-                <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}</span>
+                <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}<span style='display:block;font-size:10px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{contract_meta}</span></span>
                 <span>${entry:.2f}</span>
                 <span style="color:{pnl_color(unreal)};font-weight:600">{unreal_text}</span>
                 <span style="color:#666">{entered}</span>
@@ -2259,6 +2294,9 @@ def _paper_section(paper):
             entry   = p.get("entry_contract_price") or 0
             exit_px = p.get("exit_contract_price")
             rpnl    = p.get("realized_pnl", 0.0) or 0.0
+            contracts = contracts_for(p, closed=True)
+            deployed = deployed_capital(entry, contracts)
+            one_lot = one_contract_pnl(entry, exit_px) if exit_px is not None else None
             pct     = None
             if entry:
                 try:
@@ -2269,6 +2307,12 @@ def _paper_section(paper):
             pnl_text = fmt_pnl(rpnl)
             if pct not in (None, ""):
                 pnl_text = f"{pnl_text}<div style='font-size:10px;color:#777'>{_fmt_pct(pct)}</div>"
+            if one_lot is not None:
+                pnl_text = f"{pnl_text}<div style='font-size:10px;color:#666'>1ct {fmt_pnl(one_lot)}</div>"
+            exit_text = f"${exit_px:.2f}" if exit_px is not None else "—"
+            exit_meta = f"x{contracts}"
+            if deployed is not None:
+                exit_meta += f" · {_fmt_money(deployed)} deployed"
             rows += f"""
               <div style="display:grid;grid-template-columns:80px 60px 70px 70px 90px 100px;
                           gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
@@ -2278,7 +2322,7 @@ def _paper_section(paper):
                       color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
                       font-size:10px;font-weight:600">{side}</span>
                 <span>${entry:.2f}</span>
-                <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
+                <span>{exit_text}<span style='display:block;font-size:10px;color:#666'>{exit_meta}</span></span>
                 <span style="color:{pnl_color(rpnl)};font-weight:600">{pnl_text}</span>
                 <span style="color:#555;font-size:11px">{closed_at}</span>
               </div>"""
@@ -2301,6 +2345,9 @@ def _paper_section(paper):
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
               <div style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:{tone}">{label} P&amp;L</div>
               <div style="font-size:20px;font-weight:700;color:{pnl_color(pnl)}">{fmt_pnl(pnl)}</div>
+            </div>
+            <div style="font-size:11px;color:#777;line-height:1.45;margin-bottom:12px">
+              Dollar P&amp;L reflects actual sized contracts. Gray sublines show percent return and the 1-contract equivalent so you can compare signal quality across names.
             </div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
