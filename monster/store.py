@@ -3,6 +3,18 @@ import json
 from datetime import datetime, timezone
 
 STATUS_SEQUENCE = {"ALERTED": 0, "ENTERED": 1, "TRIMMED": 2, "TP1 HIT": 3}
+MAX_WEBHOOK_ERROR_HISTORY = 50
+
+
+def _error_signature(item):
+    if not item:
+        return None
+    return (
+        item.get("time"),
+        str(item.get("message") or ""),
+        str(item.get("symbol") or ""),
+        str(item.get("signal_id") or ""),
+    )
 
 
 def load_style_state(config, trade_style):
@@ -12,6 +24,7 @@ def load_style_state(config, trade_style):
             "trade_style": trade_style,
             "last_updated": None,
             "last_webhook_error": None,
+            "recent_webhook_errors": [],
             "last_alert": None,
             "recent_alerts": [],
             "signal_ids": [],
@@ -31,6 +44,14 @@ def load_style_state(config, trade_style):
     state.setdefault("open_position", None)
     state.setdefault("closed_positions", [])
     state.setdefault("last_webhook_error", None)
+    state.setdefault("recent_webhook_errors", [])
+    last_error = state.get("last_webhook_error")
+    if last_error:
+        history = state.get("recent_webhook_errors") or []
+        signatures = {_error_signature(item) for item in history}
+        if _error_signature(last_error) not in signatures:
+            history.append(dict(last_error))
+            state["recent_webhook_errors"] = history[-MAX_WEBHOOK_ERROR_HISTORY:]
     if state.get("open_position"):
         state["open_position"].setdefault("status", "ALERTED")
         state["open_position"].setdefault("status_updated_at", state["open_position"].get("opened_at"))
@@ -60,12 +81,16 @@ def record_webhook_error(config, trade_style, error_message, payload=None):
     if trade_style not in config["styles"]:
         return
     state = load_style_state(config, trade_style)
-    state["last_webhook_error"] = {
+    event = {
         "time": datetime.now(timezone.utc).isoformat(),
         "message": str(error_message),
         "symbol": (payload or {}).get("symbol"),
         "signal_id": (payload or {}).get("signal_id"),
     }
+    state["last_webhook_error"] = event
+    state["recent_webhook_errors"] = (
+        (state.get("recent_webhook_errors") or []) + [event]
+    )[-MAX_WEBHOOK_ERROR_HISTORY:]
     save_style_state(config, trade_style, state)
 
 

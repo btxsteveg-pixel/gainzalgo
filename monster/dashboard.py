@@ -39,6 +39,8 @@ def render_dashboard(config, public_base_url=None):
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
     ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
     settings_rows = _settings_rows(config)
+    audit_rows = _alert_audit_rows(states, paper_open_positions, paper_closed_positions)
+    swing_monitor = _swing_trigger_monitor(states, paper_open_positions, paper_closed_positions)
     health = _health_snapshot(config, display_states, webhook_base_url)
     focus_list = _focus_list(alerts, leaderboard)
 
@@ -345,9 +347,28 @@ def render_dashboard(config, public_base_url=None):
         .leader-table .table-head, .leader-table .row {{
           grid-template-columns: minmax(0, 1.2fr) minmax(72px, .8fr) minmax(72px, .8fr) minmax(92px, .9fr);
         }}
+        .audit-table .table-head, .audit-table .row {{
+          grid-template-columns: minmax(0, 1.1fr) minmax(72px, .7fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(96px, .8fr);
+        }}
+        .monitor-symbol-table .table-head, .monitor-symbol-table .row {{
+          grid-template-columns: minmax(0, 1.2fr) minmax(72px, .7fr) minmax(72px, .7fr) minmax(72px, .7fr) minmax(72px, .7fr);
+        }}
+        .reject-table .table-head, .reject-table .row {{
+          grid-template-columns: minmax(0, 1.6fr) minmax(72px, .7fr) minmax(96px, .8fr);
+        }}
         .alert-meta, .muted {{
           color: #c1a6ab;
           font-size: 12px;
+        }}
+        .audit-flow {{
+          color: #f3dfe3;
+          font-size: 12px;
+          line-height: 1.45;
+        }}
+        .audit-note {{
+          color: #c1a6ab;
+          font-size: 12px;
+          line-height: 1.4;
         }}
         .alert-symbol {{
           font-size: 14px;
@@ -406,7 +427,10 @@ def render_dashboard(config, public_base_url=None):
           }}
           .alert-table .table-head, .alert-table .row,
           .closed-table .table-head, .closed-table .row,
-          .leader-table .table-head, .leader-table .row {{
+          .leader-table .table-head, .leader-table .row,
+          .audit-table .table-head, .audit-table .row,
+          .monitor-symbol-table .table-head, .monitor-symbol-table .row,
+          .reject-table .table-head, .reject-table .row {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
         }}
@@ -498,6 +522,45 @@ def render_dashboard(config, public_base_url=None):
             </div>
             {settings_rows}
           </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="section-title">Alert Audit</div>
+          <div class="table audit-table">
+            <div class="table-head">
+              <span>Signal</span><span>Lane</span><span>Lifecycle</span><span>Paper</span><span>Outcome</span><span>Time</span>
+            </div>
+            {audit_rows}
+          </div>
+        </section>
+
+        <section class="layout">
+          <section class="panel">
+            <div class="section-title">SWING Trigger Monitor</div>
+            <div class="hero-grid" style="margin-bottom:14px;">
+              <div class="grid-stat"><span>Raw Received</span><strong>{swing_monitor['raw_received']}</strong></div>
+              <div class="grid-stat"><span>Accepted</span><strong>{swing_monitor['accepted']}</strong></div>
+              <div class="grid-stat"><span>Rejected</span><strong>{swing_monitor['rejected']}</strong></div>
+              <div class="grid-stat"><span>Real Contracts</span><strong>{swing_monitor['matched']}</strong></div>
+              <div class="grid-stat"><span>Discord Sent</span><strong>{swing_monitor['discord_sent']}</strong></div>
+              <div class="grid-stat"><span>Paper Entered</span><strong>{swing_monitor['paper_entered']}</strong></div>
+            </div>
+            <div class="table monitor-symbol-table">
+              <div class="table-head">
+                <span>Symbol</span><span>Raw</span><span>Accepted</span><span>Rejected</span><span>Paper</span>
+              </div>
+              {swing_monitor['symbol_rows']}
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title">SWING Reject Reasons</div>
+            <div class="table reject-table">
+              <div class="table-head">
+                <span>Reason</span><span>Count</span><span>Last Seen</span>
+              </div>
+              {swing_monitor['reject_rows']}
+            </div>
+          </section>
         </section>
 
         <section class="layout">
@@ -722,6 +785,344 @@ def _hero(latest_alert):
         <div><span>Mode</span><strong>{escape('Contract Match' if latest_alert.get('option_symbol') else 'Signal Only')}</strong></div>
       </div>
     """
+
+
+def _trade_style(item, fallback=None):
+    if not item:
+        return str(fallback or "").upper()
+    return str(item.get("trade_style") or item.get("style") or fallback or "").upper()
+
+
+def _collect_raw_alerts(states, style=None):
+    items = []
+    wanted_style = str(style or "").upper() or None
+    for lane, state in states.items():
+        for alert in state.get("recent_alerts") or []:
+            row = dict(alert)
+            row["trade_style"] = _trade_style(row, lane)
+            if wanted_style and row["trade_style"] != wanted_style:
+                continue
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol and symbol in DASHBOARD_HIDDEN_SYMBOLS:
+                continue
+            if not row.get("time"):
+                continue
+            items.append(row)
+    items.sort(key=lambda item: item.get("time") or "")
+    return items
+
+
+def _collect_webhook_errors(states, style=None):
+    items = []
+    seen = set()
+    wanted_style = str(style or "").upper() or None
+    for lane, state in states.items():
+        lane_style = str(lane or "").upper()
+        if wanted_style and lane_style != wanted_style:
+            continue
+        history = list(state.get("recent_webhook_errors") or [])
+        if not history and state.get("last_webhook_error"):
+            history = [state.get("last_webhook_error")]
+        for error in history:
+            row = dict(error or {})
+            row["trade_style"] = _trade_style(row, lane_style)
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol and symbol in DASHBOARD_HIDDEN_SYMBOLS:
+                continue
+            signature = (
+                row.get("time"),
+                row.get("message"),
+                row.get("symbol"),
+                row.get("signal_id"),
+                row.get("trade_style"),
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            items.append(row)
+    items.sort(key=lambda item: item.get("time") or "")
+    return items
+
+
+def _paper_signal_maps(open_positions, closed_positions, style=None):
+    open_map = {}
+    closed_map = {}
+    wanted_style = str(style or "").upper() or None
+
+    for position in open_positions or []:
+        lane = _trade_style(position)
+        if wanted_style and lane != wanted_style:
+            continue
+        signal_id = position.get("signal_id")
+        if signal_id:
+            open_map[signal_id] = position
+
+    sorted_closed = sorted(closed_positions or [], key=lambda item: item.get("closed_at") or "")
+    for position in sorted_closed:
+        lane = _trade_style(position)
+        if wanted_style and lane != wanted_style:
+            continue
+        signal_id = position.get("signal_id")
+        if signal_id:
+            closed_map[signal_id] = position
+
+    return open_map, closed_map
+
+
+def _alert_audit_rows(states, open_positions, closed_positions):
+    events = _alert_audit_events(states, open_positions, closed_positions)
+    if not events:
+        return "<div class='empty'>Audit trail fills as alerts and rejects land.</div>"
+    return "".join(_audit_row(item) for item in events[:12])
+
+
+def _alert_audit_events(states, open_positions, closed_positions):
+    alerts = _collect_raw_alerts(states)
+    errors = _collect_webhook_errors(states)
+    open_map, closed_map = _paper_signal_maps(open_positions, closed_positions)
+    events = []
+
+    for alert in alerts:
+        signal_id = alert.get("signal_id")
+        events.append(
+            {
+                "kind": "alert",
+                "time": alert.get("time"),
+                "trade_style": _trade_style(alert),
+                "symbol": alert.get("symbol"),
+                "signal_id": signal_id,
+                "alert": alert,
+                "open_position": open_map.get(signal_id),
+                "closed_position": closed_map.get(signal_id),
+            }
+        )
+
+    for error in errors:
+        events.append(
+            {
+                "kind": "reject",
+                "time": error.get("time"),
+                "trade_style": _trade_style(error),
+                "symbol": error.get("symbol"),
+                "signal_id": error.get("signal_id"),
+                "message": error.get("message"),
+            }
+        )
+
+    events.sort(key=lambda item: item.get("time") or "", reverse=True)
+    return events
+
+
+def _audit_row(item):
+    if item.get("kind") == "reject":
+        symbol = escape(str(item.get("symbol") or "Unknown"))
+        signal_meta = escape(str(item.get("signal_id") or "Rejected before signal log"))
+        lifecycle = "Received -> Rejected"
+        paper_html = "<div class='audit-note'>No paper trade</div>"
+        outcome_html = (
+            f"<div><strong class='down'>Rejected</strong>"
+            f"<div class='audit-note'>{escape(str(item.get('message') or 'Unknown error'))}</div></div>"
+        )
+        return f"""
+        <div class="row">
+          <div>
+            <div class="alert-symbol">{symbol}</div>
+            <div class="alert-meta">{signal_meta}</div>
+          </div>
+          <div><strong>{escape(str(item.get('trade_style') or 'N/A'))}</strong></div>
+          <div class="audit-flow">{escape(lifecycle)}</div>
+          <div>{paper_html}</div>
+          <div>{outcome_html}</div>
+          <div>{escape(_short_time(item.get('time')))}</div>
+        </div>
+        """
+
+    alert = item.get("alert") or {}
+    open_position = item.get("open_position") or {}
+    closed_position = item.get("closed_position") or {}
+    contract = _fmt_contract(alert.get("option_symbol"))
+    if contract == "N/A":
+        contract = str(alert.get("signal_id") or "No contract logged")
+    lifecycle = _audit_lifecycle(alert, open_position, closed_position)
+    paper_html = _audit_paper_cell(open_position, closed_position)
+    outcome_html = _audit_outcome_cell(alert, open_position, closed_position)
+    return f"""
+    <div class="row">
+      <div>
+        <div class="alert-symbol">{escape(str(alert.get('symbol') or 'Unknown'))} • {escape(str(alert.get('side') or 'N/A'))}</div>
+        <div class="alert-meta">{escape(contract)}</div>
+      </div>
+      <div><strong>{escape(_trade_style(alert))}</strong></div>
+      <div class="audit-flow">{escape(lifecycle)}</div>
+      <div>{paper_html}</div>
+      <div>{outcome_html}</div>
+      <div>{escape(_short_time(item.get('time')))}</div>
+    </div>
+    """
+
+
+def _audit_lifecycle(alert, open_position, closed_position):
+    steps = ["Received"]
+    if _has_real_contract_reference(alert):
+        steps.append("Contract matched")
+    else:
+        steps.append("Contract incomplete")
+
+    steps.append("Discord sent" if alert.get("discord_sent") else "Discord blocked")
+
+    if closed_position:
+        steps.append("Paper closed")
+    elif open_position:
+        steps.append("Paper live")
+    elif _has_real_contract_reference(alert) and alert.get("discord_sent"):
+        steps.append("Paper pending")
+
+    return " -> ".join(steps)
+
+
+def _audit_paper_cell(open_position, closed_position):
+    if closed_position:
+        pnl = closed_position.get("realized_pnl")
+        reason = closed_position.get("exit_reason") or "Closed"
+        return (
+            f"<div><strong class='{_pnl_class(pnl)}'>{escape(_fmt_money(pnl))}</strong>"
+            f"<div class='audit-note'>{escape(str(reason))}</div></div>"
+        )
+    if open_position:
+        pnl = open_position.get("unrealized_pnl")
+        pct = open_position.get("live_pnl_pct")
+        pct_text = _fmt_pct(pct) if pct not in (None, "") else "Live"
+        return (
+            f"<div><strong class='{_pnl_class(pnl)}'>{escape(_fmt_money(pnl))}</strong>"
+            f"<div class='audit-note'>{escape(pct_text)}</div></div>"
+        )
+    return "<div class='audit-note'>No paper entry</div>"
+
+
+def _audit_outcome_cell(alert, open_position, closed_position):
+    if closed_position:
+        reason = closed_position.get("exit_reason") or "Paper trade closed"
+        return f"<div class='audit-note'>{escape(str(reason))}</div>"
+    if open_position:
+        status = open_position.get("status") or "OPEN"
+        return f"<div><strong class='warn'>{escape(str(status))}</strong><div class='audit-note'>Paper position active</div></div>"
+    if not _has_real_contract_reference(alert):
+        return f"<div><strong class='down'>Filtered</strong><div class='audit-note'>{escape(_contract_gap_reason(alert))}</div></div>"
+    if not alert.get("discord_sent"):
+        return "<div><strong class='down'>Blocked</strong><div class='audit-note'>Discord send failed or was suppressed</div></div>"
+    return "<div><strong class='warn'>Waiting</strong><div class='audit-note'>No paper entry recorded yet</div></div>"
+
+
+def _contract_gap_reason(alert):
+    if not alert.get("option_symbol"):
+        return "No option symbol matched"
+    contract_price = alert.get("contract_price")
+    if contract_price in (None, "", 0):
+        return "No contract premium matched"
+    pricing_source = str(alert.get("pricing_source") or "").strip().lower()
+    if pricing_source == "estimated":
+        return "Estimated contract blocked from Discord"
+    return "Contract reference incomplete"
+
+
+def _swing_trigger_monitor(states, open_positions, closed_positions):
+    style = "SWING"
+    swing_alerts = _collect_raw_alerts(states, style)
+    swing_errors = _collect_webhook_errors(states, style)
+    open_map, closed_map = _paper_signal_maps(open_positions, closed_positions, style)
+    paper_signal_ids = set(open_map) | set(closed_map)
+
+    symbol_totals = defaultdict(lambda: {"raw": 0, "accepted": 0, "rejected": 0, "paper": 0})
+    for alert in swing_alerts:
+        symbol = str(alert.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_totals[symbol]["raw"] += 1
+        symbol_totals[symbol]["accepted"] += 1
+        if alert.get("signal_id") in paper_signal_ids:
+            symbol_totals[symbol]["paper"] += 1
+
+    for error in swing_errors:
+        symbol = str(error.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_totals[symbol]["raw"] += 1
+        symbol_totals[symbol]["rejected"] += 1
+
+    matched = sum(1 for alert in swing_alerts if _has_real_contract_reference(alert))
+    discord_sent = sum(1 for alert in swing_alerts if alert.get("discord_sent"))
+    paper_entered = sum(1 for alert in swing_alerts if alert.get("signal_id") in paper_signal_ids)
+    symbol_rows = _swing_symbol_rows(symbol_totals)
+    reject_rows = _swing_reject_rows(swing_errors)
+
+    return {
+        "raw_received": len(swing_alerts) + len(swing_errors),
+        "accepted": len(swing_alerts),
+        "rejected": len(swing_errors),
+        "matched": matched,
+        "discord_sent": discord_sent,
+        "paper_entered": paper_entered,
+        "symbol_rows": symbol_rows,
+        "reject_rows": reject_rows,
+    }
+
+
+def _swing_symbol_rows(symbol_totals):
+    if not symbol_totals:
+        return "<div class='empty'>Symbol counts will populate after SWING alerts hit the hosted route.</div>"
+
+    ordered = sorted(
+        symbol_totals.items(),
+        key=lambda item: (
+            item[1]["raw"],
+            item[1]["accepted"],
+            item[1]["paper"],
+            item[0],
+        ),
+        reverse=True,
+    )
+    rows = []
+    for symbol, stats in ordered[:8]:
+        rows.append(
+            f"""
+            <div class="row">
+              <div><strong>{escape(symbol)}</strong></div>
+              <div>{stats['raw']}</div>
+              <div>{stats['accepted']}</div>
+              <div>{stats['rejected']}</div>
+              <div>{stats['paper']}</div>
+            </div>
+            """
+        )
+    return "".join(rows)
+
+
+def _swing_reject_rows(errors):
+    if not errors:
+        return "<div class='empty'>No SWING rejects recorded yet.</div>"
+
+    reason_counts = Counter()
+    last_seen = {}
+    for error in errors:
+        message = str(error.get("message") or "Unknown error").strip()
+        reason_counts[message] += 1
+        current_time = error.get("time")
+        previous_time = last_seen.get(message)
+        if not previous_time or str(current_time or "") > str(previous_time or ""):
+            last_seen[message] = current_time
+
+    rows = []
+    for message, count in reason_counts.most_common(8):
+        rows.append(
+            f"""
+            <div class="row">
+              <div class="audit-note">{escape(message)}</div>
+              <div>{count}</div>
+              <div>{escape(_short_time(last_seen.get(message)))}</div>
+            </div>
+            """
+        )
+    return "".join(rows)
 
 
 def _collect_alerts(states):
