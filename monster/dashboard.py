@@ -1492,6 +1492,10 @@ def _paper_section(paper):
     stats   = paper.get("stats") or {}
     opens   = paper.get("open_positions") or []
     closed  = paper.get("recent_closed") or []
+    lotto_open = [item for item in opens if str(item.get("style") or "").upper() == "LOTTO"]
+    swing_open = [item for item in opens if str(item.get("style") or "").upper() == "SWING"]
+    lotto_closed = [item for item in closed if str(item.get("style") or "").upper() == "LOTTO"]
+    swing_closed = [item for item in closed if str(item.get("style") or "").upper() == "SWING"]
 
     total_pnl   = stats.get("total_pnl", 0.0)
     lotto_pnl   = stats.get("lotto_pnl", 0.0)
@@ -1509,6 +1513,109 @@ def _paper_section(paper):
     def fmt_pnl(v):
         sign = "+" if v >= 0 else ""
         return f"{sign}${v:.2f}"
+
+    def open_rows_for(items):
+        if not items:
+            return "<div style='color:#555;font-size:13px;padding:12px 0'>No open positions</div>"
+        rows = ""
+        for p in items:
+            sym         = escape(str(p.get("symbol", "")))
+            side        = escape(str(p.get("side", "")))
+            entry       = p.get("entry_contract_price") or 0
+            unreal      = p.get("unrealized_pnl", 0.0) or 0.0
+            opt_sym     = escape(str(p.get("option_symbol", "—")))
+            entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
+            unreal_pct  = p.get("live_pnl_pct")
+            unreal_text = fmt_pnl(unreal)
+            if unreal_pct not in (None, ""):
+                unreal_text = f"{unreal_text}<div style='font-size:10px;color:#777'>{_fmt_pct(unreal_pct)}</div>"
+            rows += f"""
+              <div style="display:grid;grid-template-columns:80px 60px 1fr 70px 90px 100px;
+                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
+                          font-size:12px;align-items:center">
+                <span style="font-weight:600">{sym}</span>
+                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
+                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
+                      font-size:10px;font-weight:600">{side}</span>
+                <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}</span>
+                <span>${entry:.2f}</span>
+                <span style="color:{pnl_color(unreal)};font-weight:600">{unreal_text}</span>
+                <span style="color:#666">{entered}</span>
+              </div>"""
+        return f"""
+            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
+              <div style="display:grid;grid-template-columns:80px 60px 1fr 70px 90px 100px;
+                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
+                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
+                <span>Symbol</span><span>Side</span><span>Contract</span><span>Entry</span><span>Unreal P&amp;L</span><span>Entered</span>
+              </div>
+              {rows}
+            </div>"""
+
+    def closed_rows_for(items):
+        if not items:
+            return "<div style='color:#555;font-size:13px;padding:12px 0'>No closed trades yet</div>"
+        rows = ""
+        for p in items:
+            sym     = escape(str(p.get("symbol", "")))
+            side    = escape(str(p.get("side", "")))
+            entry   = p.get("entry_contract_price") or 0
+            exit_px = p.get("exit_contract_price")
+            rpnl    = p.get("realized_pnl", 0.0) or 0.0
+            pct     = None
+            if entry:
+                try:
+                    pct = round(((float(exit_px) - float(entry)) / float(entry)) * 100, 2) if exit_px is not None else None
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pct = None
+            closed_at = str(p.get("closed_at", ""))[:16].replace("T", " ")
+            pnl_text = fmt_pnl(rpnl)
+            if pct not in (None, ""):
+                pnl_text = f"{pnl_text}<div style='font-size:10px;color:#777'>{_fmt_pct(pct)}</div>"
+            rows += f"""
+              <div style="display:grid;grid-template-columns:80px 60px 70px 70px 90px 100px;
+                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
+                          font-size:12px;align-items:center">
+                <span style="font-weight:600">{sym}</span>
+                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
+                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
+                      font-size:10px;font-weight:600">{side}</span>
+                <span>${entry:.2f}</span>
+                <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
+                <span style="color:{pnl_color(rpnl)};font-weight:600">{pnl_text}</span>
+                <span style="color:#555;font-size:11px">{closed_at}</span>
+              </div>"""
+        return f"""
+            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
+              <div style="display:grid;grid-template-columns:80px 60px 70px 70px 90px 100px;
+                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
+                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
+                <span>Symbol</span><span>Side</span><span>Entry</span><span>Exit</span><span>P&amp;L</span><span>Closed</span>
+              </div>
+              {rows}
+            </div>"""
+
+    def style_panel(label, tone, pnl, trades_count, open_items, closed_items):
+        win_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) > 0)
+        loss_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) <= 0)
+        wr = round((win_count / len(closed_items)) * 100) if closed_items else 0
+        return f"""
+          <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+              <div style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:{tone}">{label} P&amp;L</div>
+              <div style="font-size:20px;font-weight:700;color:{pnl_color(pnl)}">{fmt_pnl(pnl)}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Win Rate</div><div style="font-size:18px;font-weight:600">{wr}%</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Open</div><div style="font-size:18px;font-weight:600">{len(open_items)}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">W / L</div><div style="font-size:18px;font-weight:600">{win_count}/{loss_count}</div></div>
+            </div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Open Positions</div>
+            {open_rows_for(open_items)}
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 8px">Recent Closed</div>
+            {closed_rows_for(closed_items)}
+          </div>"""
 
     # ── Stat cards ───────────────────────────────────────────────────────
     stat_cards = f"""
@@ -1537,128 +1644,11 @@ def _paper_section(paper):
           </div>
         </div>"""
 
-    # ── Open positions ────────────────────────────────────────────────────
-    if opens:
-        open_rows = ""
-        for p in opens:
-            sym         = escape(str(p.get("symbol", "")))
-            side        = escape(str(p.get("side", "")))
-            style       = escape(str(p.get("style", "")))
-            entry       = p.get("entry_contract_price") or 0
-            unreal      = p.get("unrealized_pnl", 0.0) or 0.0
-            opt_sym     = escape(str(p.get("option_symbol", "—")))
-            tp          = p.get("tp")
-            sl          = p.get("sl")
-            entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
-            underlying  = p.get("current_underlying_price")
-            und_str     = f"${underlying:.2f}" if underlying else "—"
-            unreal_pct  = p.get("live_pnl_pct")
-            unreal_text = fmt_pnl(unreal)
-            if unreal_pct not in (None, ""):
-                unreal_text = f"{unreal_text}<div style='font-size:10px;color:#777'>{_fmt_pct(unreal_pct)}</div>"
-
-            open_rows += f"""
-              <div style="display:grid;grid-template-columns:80px 60px 60px 1fr 70px 70px 80px 80px 80px;
-                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
-                          font-size:12px;align-items:center">
-                <span style="font-weight:600">{sym}</span>
-                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
-                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
-                      font-size:10px;font-weight:600">{side}</span>
-                <span style="background:rgba(255,183,39,0.12);color:#ffb727;padding:2px 6px;
-                      border-radius:4px;font-size:10px">{style}</span>
-                <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}</span>
-                <span>${entry:.2f}</span>
-                <span>{und_str}</span>
-                <span>TP: {f"${float(tp):.2f}" if tp else "—"} / SL: {f"${float(sl):.2f}" if sl else "—"}</span>
-                <span style="color:{pnl_color(unreal)};font-weight:600">{unreal_text}</span>
-                <span style="color:#666">{entered}</span>
-              </div>"""
-
-        open_section = f"""
-          <div style="margin-bottom:16px">
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
-              Open Positions ({len(opens)})
-            </div>
-            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-              <div style="display:grid;grid-template-columns:80px 60px 60px 1fr 70px 70px 80px 80px 80px;
-                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
-                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
-                <span>Symbol</span><span>Side</span><span>Style</span><span>Contract</span>
-                <span>Entry $</span><span>Underlying</span><span>TP / SL</span>
-                <span>Unreal P&L</span><span>Entered</span>
-              </div>
-              {open_rows}
-            </div>
-          </div>"""
-    else:
-        open_section = """
-          <div style="margin-bottom:16px">
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Open Positions</div>
-            <div style="color:#555;font-size:13px;padding:16px 0">No open paper positions</div>
-          </div>"""
-
-    # ── Recent closed ─────────────────────────────────────────────────────
-    if closed:
-        closed_rows = ""
-        for p in closed:
-            sym     = escape(str(p.get("symbol", "")))
-            side    = escape(str(p.get("side", "")))
-            style   = escape(str(p.get("style", "")))
-            entry   = p.get("entry_contract_price") or 0
-            exit_px = p.get("exit_contract_price")
-            rpnl    = p.get("realized_pnl", 0.0) or 0.0
-            pct     = None
-            if entry:
-                try:
-                    pct = round(((float(exit_px) - float(entry)) / float(entry)) * 100, 2) if exit_px is not None else None
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pct = None
-            reason  = escape(str(p.get("exit_reason", "—")))
-            closed_at = str(p.get("closed_at", ""))[:16].replace("T", " ")
-            pnl_text = fmt_pnl(rpnl)
-            if pct not in (None, ""):
-                pnl_text = f"{pnl_text}<div style='font-size:10px;color:#777'>{_fmt_pct(pct)}</div>"
-
-            closed_rows += f"""
-              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 70px 1fr 90px 100px;
-                          gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
-                          font-size:12px;align-items:center">
-                <span style="font-weight:600">{sym}</span>
-                <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
-                      color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;
-                      border-radius:4px;font-size:10px;font-weight:600">{side}</span>
-                <span style="background:rgba(255,183,39,0.12);color:#ffb727;padding:2px 6px;
-                      border-radius:4px;font-size:10px">{style}</span>
-                <span>${entry:.2f}</span>
-                <span>{f"${exit_px:.2f}" if exit_px is not None else "—"}</span>
-                <span style="color:#aaa;font-size:11px">{reason}</span>
-                <span style="color:{pnl_color(rpnl)};font-weight:600">{pnl_text}</span>
-                <span style="color:#555;font-size:11px">{closed_at}</span>
-              </div>"""
-
-        closed_section = f"""
-          <div>
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
-              Recent Closed ({len(closed)})
-            </div>
-            <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 70px 1fr 90px 100px;
-                          gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
-                          font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
-                <span>Symbol</span><span>Side</span><span>Style</span>
-                <span>Entry</span><span>Exit</span><span>Reason</span>
-                <span>P&L</span><span>Closed</span>
-              </div>
-              {closed_rows}
-            </div>
-          </div>"""
-    else:
-        closed_section = """
-          <div>
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Recent Closed</div>
-            <div style="color:#555;font-size:13px;padding:16px 0">Paper trades will appear here after they close</div>
-          </div>"""
+    style_sections = f"""
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+          {style_panel('LOTTO', '#ffb727', lotto_pnl, lotto_trades, lotto_open, lotto_closed)}
+          {style_panel('SWING', '#8ad7ff', swing_pnl, swing_trades, swing_open, swing_closed)}
+        </div>"""
 
     empty_note = "" if total_trades > 0 else """
         <div style="text-align:center;padding:20px 0;color:#555;font-size:13px">
@@ -1678,7 +1668,6 @@ def _paper_section(paper):
                       border-radius:10px;padding:18px 20px">
             {empty_note}
             {stat_cards}
-            {open_section}
-            {closed_section}
+            {style_sections}
           </div>
         </section>"""
