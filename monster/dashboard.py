@@ -2253,16 +2253,16 @@ def _paper_section(paper):
             contracts   = contracts_for(p)
             deployed    = deployed_capital(entry, contracts)
             one_lot     = one_contract_pnl(entry, p.get("current_contract_price"))
-            contract_meta = f"x{contracts}"
+            contract_meta = ""
             if deployed is not None:
-                contract_meta += f" · {_fmt_money(deployed)} deployed"
+                contract_meta = f"{_fmt_money(deployed)} deployed"
             unreal_text = fmt_pnl(unreal)
             if unreal_pct not in (None, ""):
                 unreal_text = f"{unreal_text}<div style='font-size:10px;color:#777'>{_fmt_pct(unreal_pct)}</div>"
             if one_lot is not None:
                 unreal_text = f"{unreal_text}<div style='font-size:10px;color:#666'>1ct {fmt_pnl(one_lot)}</div>"
             rows += f"""
-              <div style="display:grid;grid-template-columns:80px 60px 1fr 70px 90px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 1fr 60px 70px 100px 100px;
                           gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
                           font-size:12px;align-items:center">
                 <span style="font-weight:600">{sym}</span>
@@ -2270,16 +2270,17 @@ def _paper_section(paper):
                       color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
                       font-size:10px;font-weight:600">{side}</span>
                 <span style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{opt_sym}<span style='display:block;font-size:10px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{contract_meta}</span></span>
+                <span style="font-weight:600">{contracts}</span>
                 <span>${entry:.2f}</span>
                 <span style="color:{pnl_color(unreal)};font-weight:600">{unreal_text}</span>
                 <span style="color:#666">{entered}</span>
               </div>"""
         return f"""
             <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-              <div style="display:grid;grid-template-columns:80px 60px 1fr 70px 90px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 1fr 60px 70px 100px 100px;
                           gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
                           font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
-                <span>Symbol</span><span>Side</span><span>Contract</span><span>Entry</span><span>Unreal P&amp;L</span><span>Entered</span>
+                <span>Symbol</span><span>Side</span><span>Contract</span><span>Qty</span><span>Entry</span><span>Unreal P&amp;L</span><span>Entered</span>
               </div>
               {rows}
             </div>"""
@@ -2310,17 +2311,18 @@ def _paper_section(paper):
             if one_lot is not None:
                 pnl_text = f"{pnl_text}<div style='font-size:10px;color:#666'>1ct {fmt_pnl(one_lot)}</div>"
             exit_text = f"${exit_px:.2f}" if exit_px is not None else "—"
-            exit_meta = f"x{contracts}"
+            exit_meta = ""
             if deployed is not None:
-                exit_meta += f" · {_fmt_money(deployed)} deployed"
+                exit_meta = f"{_fmt_money(deployed)} deployed"
             rows += f"""
-              <div style="display:grid;grid-template-columns:80px 60px 70px 70px 90px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 90px 100px 100px;
                           gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
                           font-size:12px;align-items:center">
                 <span style="font-weight:600">{sym}</span>
                 <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
                       color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
                       font-size:10px;font-weight:600">{side}</span>
+                <span style="font-weight:600">{contracts}</span>
                 <span>${entry:.2f}</span>
                 <span>{exit_text}<span style='display:block;font-size:10px;color:#666'>{exit_meta}</span></span>
                 <span style="color:{pnl_color(rpnl)};font-weight:600">{pnl_text}</span>
@@ -2328,10 +2330,10 @@ def _paper_section(paper):
               </div>"""
         return f"""
             <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-              <div style="display:grid;grid-template-columns:80px 60px 70px 70px 90px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 90px 100px 100px;
                           gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
                           font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
-                <span>Symbol</span><span>Side</span><span>Entry</span><span>Exit</span><span>P&amp;L</span><span>Closed</span>
+                <span>Symbol</span><span>Side</span><span>Qty</span><span>Entry</span><span>Exit</span><span>P&amp;L</span><span>Closed</span>
               </div>
               {rows}
             </div>"""
