@@ -954,7 +954,7 @@ def _settings_rows(config):
         _settings_row("SWING", "DTE Window", _dte_window(styles.get("SWING", {})), "Target expiry band for swing contracts"),
         _settings_row("SWING", "Risk %", _fmt_pct(styles.get("SWING", {}).get("risk_pct")), "Paper-account sizing per trade"),
         _settings_row("SWING", "Force Close", "Disabled", "SWING positions can hold overnight until stop, trail, or max-hold exit"),
-        _settings_row("SWING", "Trail Stop", _fmt_pct(styles.get("SWING", {}).get("trailing_stop_pct")), "Trailing stop after TP1 when enabled"),
+        _settings_row("SWING", "Trail Stop", _fmt_ratio_pct(styles.get("SWING", {}).get("trailing_stop_pct")), "Trailing stop after TP1 when enabled"),
         _settings_row("FLOW", "Min Premium", _fmt_money(flow.get("min_premium")), "Minimum unusual-flow premium to qualify"),
         _settings_row("FLOW", "Max DTE", str(flow.get("max_dte", "N/A")), "Maximum expiry distance for flow candidates"),
         _settings_row("SYSTEM", "Paper Account", _fmt_money(config.get("paper_account_size")), "Hosted paper account size for sizing and P&L"),
@@ -1415,6 +1415,15 @@ def _fmt_pct(value):
         return "N/A"
     try:
         return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_ratio_pct(value):
+    if value in (None, ""):
+        return "N/A"
+    try:
+        return f"{float(value) * 100:.2f}%"
     except (TypeError, ValueError):
         return str(value)
 
