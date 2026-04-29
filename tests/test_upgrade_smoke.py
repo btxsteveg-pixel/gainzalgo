@@ -1,7 +1,9 @@
 import unittest
+from types import SimpleNamespace
 
 from monster.dashboard import _execution_funnel, _lane_analytics
 from monster.discord_sender import _extract_strike_from_symbol, _fmt_contract_expiry, _title_icon, _should_skip_discord_alert
+from monster.options_flow import _classify_time_and_sale_side, _select_sold_alerts_for_posting
 from monster.paper_trader import _should_force_close_position
 
 
@@ -67,6 +69,67 @@ class PaperTraderPolicyTests(unittest.TestCase):
     def test_only_lotto_is_eligible_for_end_of_day_force_close(self):
         self.assertTrue(_should_force_close_position({"style": "LOTTO"}, True))
         self.assertFalse(_should_force_close_position({"style": "SWING"}, True))
+
+
+class SoldFlowTests(unittest.TestCase):
+    def test_aggressor_side_prefers_explicit_sell_signal(self):
+        event = SimpleNamespace(
+            aggressor_side="SELL",
+            aggressorSide="",
+            price=2.5,
+            bid_price=2.45,
+            bidPrice=2.45,
+            ask_price=2.55,
+            askPrice=2.55,
+        )
+        self.assertEqual(_classify_time_and_sale_side(event), "sell")
+
+    def test_aggressor_side_falls_back_to_bid_ask_context(self):
+        event = SimpleNamespace(
+            aggressor_side="",
+            aggressorSide="",
+            price=1.0,
+            bid_price=1.0,
+            bidPrice=1.0,
+            ask_price=1.1,
+            askPrice=1.1,
+        )
+        self.assertEqual(_classify_time_and_sale_side(event), "sell")
+
+    def test_sold_alerts_use_independent_namespace_state(self):
+        alerts = [
+            {
+                "streamer_symbol": ".AAPL260501C00200000",
+                "contract_symbol": ".AAPL260501C00200000",
+                "symbol": "AAPL",
+                "strike": 200.0,
+                "opt_type": "C",
+                "expiry_str": "05/01/2026",
+                "dte": 2,
+                "volume": 5000,
+                "open_interest": 1200,
+                "spot": 3.5,
+                "premium": 1200000.0,
+                "seller_premium": 450000.0,
+                "buyer_premium": 100000.0,
+                "seller_share": 0.75,
+                "seller_volume": 1400,
+                "buyer_volume": 300,
+                "seller_trades": 7,
+                "buyer_trades": 2,
+            }
+        ]
+        state = {
+            "recent_contracts": {".AAPL260501C00200000": {"posted_at": "2099-01-01T00:00:00Z"}},
+            "recent_symbols": {"AAPL": {"posted_at": "2099-01-01T00:00:00Z"}},
+            "last_posted": [],
+            "daily_alert_day": "2099-01-01",
+            "daily_alert_count": 1,
+        }
+
+        selected, meta = _select_sold_alerts_for_posting(alerts, state)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(meta["ranked_by"], "seller_premium_then_share")
 
 
 if __name__ == "__main__":

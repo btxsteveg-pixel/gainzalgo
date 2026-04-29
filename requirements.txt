@@ -1,4 +1,5 @@
 # Standard-library app; file included so Render/Railway detect Python cleanly.
 
 # Options Flow Scanner — Tastytrade API
+httpx
 tastytrade
