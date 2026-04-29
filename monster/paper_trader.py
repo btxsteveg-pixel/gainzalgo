@@ -88,6 +88,14 @@ def _should_force_close():
     )
 
 
+def _should_force_close_position(position, force_close_active=None):
+    """Only LOTTO positions are force-closed at end of day. SWING can hold overnight."""
+    style = str((position or {}).get("style") or "LOTTO").upper()
+    if force_close_active is None:
+        force_close_active = _should_force_close()
+    return style == "LOTTO" and bool(force_close_active)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # STATE MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════
@@ -470,9 +478,9 @@ def _monitor_loop(config):
                     trailing_stop_enabled = bool(style_cfg.get("trailing_stop_enabled")) and is_swing
                     hold_days_max = style_cfg.get("hold_days_max") if is_swing else None
 
-                    # ── Force close at 3:55 PM ET ─────────────────────────
-                    if force_close:
-                        closed, pnl = _close_position(config, pos, "Force close 3:55 PM ET")
+                    # ── Force close at 3:55 PM ET (LOTTO only) ────────────
+                    if force_close and _should_force_close_position(pos, force_close):
+                        closed, pnl = _close_position(config, pos, "LOTTO force close 3:55 PM ET")
                         newly_closed.append(closed)
                         _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
                         continue

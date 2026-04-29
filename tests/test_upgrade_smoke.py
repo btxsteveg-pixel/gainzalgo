@@ -2,6 +2,7 @@ import unittest
 
 from monster.dashboard import _execution_funnel, _lane_analytics
 from monster.discord_sender import _extract_strike_from_symbol, _fmt_contract_expiry, _title_icon, _should_skip_discord_alert
+from monster.paper_trader import _should_force_close_position
 
 
 class DiscordFormattingTests(unittest.TestCase):
@@ -60,6 +61,12 @@ class DashboardAnalyticsTests(unittest.TestCase):
         self.assertEqual(lanes["LOTTO"]["paper_entries"], 2)
         self.assertEqual(lanes["LOTTO"]["pnl"], 100.0)
         self.assertEqual(lanes["SWING"]["pnl"], -50.0)
+
+
+class PaperTraderPolicyTests(unittest.TestCase):
+    def test_only_lotto_is_eligible_for_end_of_day_force_close(self):
+        self.assertTrue(_should_force_close_position({"style": "LOTTO"}, True))
+        self.assertFalse(_should_force_close_position({"style": "SWING"}, True))
 
 
 if __name__ == "__main__":

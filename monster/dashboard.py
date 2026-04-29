@@ -949,9 +949,11 @@ def _settings_rows(config):
         _settings_row("LOTTO", "Confidence Floor", _fmt(styles.get("LOTTO", {}).get("min_confidence")), "Minimum score before a LOTTO alert is accepted"),
         _settings_row("LOTTO", "DTE Window", _dte_window(styles.get("LOTTO", {})), "Target expiry band for contract matching"),
         _settings_row("LOTTO", "Risk %", _fmt_pct(styles.get("LOTTO", {}).get("risk_pct")), "Paper-account sizing per trade"),
+        _settings_row("LOTTO", "Force Close", "3:55 PM ET", "LOTTO positions are closed before the bell"),
         _settings_row("SWING", "Confidence Floor", _fmt(styles.get("SWING", {}).get("min_confidence")), "Minimum score before a SWING alert is accepted"),
         _settings_row("SWING", "DTE Window", _dte_window(styles.get("SWING", {})), "Target expiry band for swing contracts"),
         _settings_row("SWING", "Risk %", _fmt_pct(styles.get("SWING", {}).get("risk_pct")), "Paper-account sizing per trade"),
+        _settings_row("SWING", "Force Close", "Disabled", "SWING positions can hold overnight until stop, trail, or max-hold exit"),
         _settings_row("SWING", "Trail Stop", _fmt_pct(styles.get("SWING", {}).get("trailing_stop_pct")), "Trailing stop after TP1 when enabled"),
         _settings_row("FLOW", "Min Premium", _fmt_money(flow.get("min_premium")), "Minimum unusual-flow premium to qualify"),
         _settings_row("FLOW", "Max DTE", str(flow.get("max_dte", "N/A")), "Maximum expiry distance for flow candidates"),
@@ -1670,7 +1672,7 @@ def _paper_section(paper):
                         animation:pulse 2s infinite"></div>
             <div style="font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
                         color:#ffb727">Paper Trading Engine</div>
-            <div style="font-size:11px;color:#555;margin-left:4px">Alpaca Paper · Auto TP/SL · Force close 3:55 PM ET</div>
+            <div style="font-size:11px;color:#555;margin-left:4px">Alpaca Paper · Auto TP/SL · LOTTO closes 3:55 PM ET · SWING can hold overnight</div>
           </div>
           <div style="background:rgba(255,183,39,0.04);border:1px solid rgba(255,183,39,0.18);
                       border-radius:10px;padding:18px 20px">
