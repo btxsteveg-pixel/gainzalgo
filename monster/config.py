@@ -71,6 +71,11 @@ def load_config():
             "scan_secret":          os.getenv("FLOW_SCAN_SECRET", ""),
             "enabled":              os.getenv("FLOW_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
         },
+        "news": {
+            "enabled": os.getenv("NEWS_RADAR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+            "refresh_seconds": int(os.getenv("NEWS_REFRESH_SECONDS", "90")),
+            "benzinga_api_key": os.getenv("BENZINGA_NEWS_API_KEY", "").strip(),
+        },
         "styles": {
             "LOTTO": {
                 "discord_webhook": os.getenv("DISCORD_WEBHOOK_URL_LOTTO", ""),

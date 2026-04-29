@@ -4,6 +4,7 @@ from html import escape
 import re
 
 from monster.options_data import attach_live_pnl, alpaca_enabled, fetch_stock_snapshots, _extract_stock_price
+from monster.news_radar import get_news_radar
 from monster.store import load_all_states
 try:
     from monster.paper_trader import get_paper_summary
@@ -40,6 +41,7 @@ def render_dashboard(config, public_base_url=None):
     ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
     settings_rows = _settings_rows(config)
     premarket = _premarket_advisory(config)
+    news = get_news_radar(config)
     audit_rows = _alert_audit_rows(states, paper_open_positions, paper_closed_positions)
     swing_monitor = _swing_trigger_monitor(states, paper_open_positions, paper_closed_positions)
     health = _health_snapshot(config, display_states, webhook_base_url)
@@ -360,6 +362,9 @@ def render_dashboard(config, public_base_url=None):
         .scanner-table .table-head, .scanner-table .row {{
           grid-template-columns: minmax(0, 1.2fr) minmax(72px, .7fr) minmax(72px, .7fr) minmax(96px, .8fr) minmax(0, 1fr);
         }}
+        .news-table .table-head, .news-table .row {{
+          grid-template-columns: minmax(0, 1.4fr) minmax(96px, .8fr) minmax(96px, .8fr);
+        }}
         .alert-meta, .muted {{
           color: #c1a6ab;
           font-size: 12px;
@@ -435,9 +440,18 @@ def render_dashboard(config, public_base_url=None):
           .audit-table .table-head, .audit-table .row,
           .monitor-symbol-table .table-head, .monitor-symbol-table .row,
           .reject-table .table-head, .reject-table .row,
-          .scanner-table .table-head, .scanner-table .row {{
+          .scanner-table .table-head, .scanner-table .row,
+          .news-table .table-head, .news-table .row {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
+        }}
+        .news-link {{
+          color: #f7e8eb;
+          text-decoration: none;
+        }}
+        .news-link:hover {{
+          text-decoration: underline;
+          color: #ffffff;
         }}
       </style>
     </head>
@@ -550,6 +564,26 @@ def render_dashboard(config, public_base_url=None):
               <span>Symbol</span><span>Last</span><span>Gap</span><span>Volume</span><span>Lane Fit</span>
             </div>
             {premarket['rows']}
+          </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="card-head" style="margin-bottom:10px;">
+            <div class="section-title" style="margin-bottom:0;">News Radar</div>
+            <div class="muted">{escape(news['mode'])}</div>
+          </div>
+          <div class="hero-grid" style="margin-bottom:14px;">
+            <div class="grid-stat"><span>Headlines</span><strong>{news['headline_count']}</strong></div>
+            <div class="grid-stat"><span>Sources</span><strong>{news['source_count']}</strong></div>
+            <div class="grid-stat"><span>Last Published</span><strong>{escape(_short_time(news['last_published']))}</strong></div>
+            <div class="grid-stat"><span>Last Checked</span><strong>{escape(_short_time(news['last_checked']))}</strong></div>
+          </div>
+          <div class="recap-box" style="margin-bottom:14px;">{escape(news['note'])}</div>
+          <div class="table news-table">
+            <div class="table-head">
+              <span>Headline</span><span>Source</span><span>Time</span>
+            </div>
+            {_news_rows(news['rows'])}
           </div>
         </section>
 
@@ -1315,6 +1349,23 @@ def _premarket_row(item):
       <div><strong>{escape(lane_fit)}</strong><div class="audit-note">Advisory only</div></div>
     </div>
     """
+
+
+def _news_rows(items):
+    if not items:
+        return "<div class='empty'>No live headlines available yet.</div>"
+    rows = []
+    for item in items[:8]:
+        rows.append(
+            f"""
+            <div class="row">
+              <div><a class="news-link" href="{escape(str(item.get('link') or '#'))}" target="_blank" rel="noopener noreferrer">{escape(str(item.get('title') or 'Untitled headline'))}</a></div>
+              <div>{escape(str(item.get('source') or 'News'))}</div>
+              <div>{escape(_short_time(item.get('published_at')))}</div>
+            </div>
+            """
+        )
+    return "".join(rows)
 
 
 def _collect_alerts(states):
