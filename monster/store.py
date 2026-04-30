@@ -1,5 +1,6 @@
 import csv
 import json
+import shutil
 from datetime import datetime, timezone
 
 STATUS_SEQUENCE = {"ALERTED": 0, "ENTERED": 1, "TRIMMED": 2, "TP1 HIT": 3}
@@ -19,6 +20,7 @@ def _error_signature(item):
 
 def load_style_state(config, trade_style):
     path = config["styles"][trade_style]["state_file"]
+    _maybe_migrate_data_file(config, path)
     if not path.exists():
         return {
             "trade_style": trade_style,
@@ -74,6 +76,7 @@ def load_style_state(config, trade_style):
 
 def save_style_state(config, trade_style, state):
     path = config["styles"][trade_style]["state_file"]
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2))
 
 
@@ -178,6 +181,8 @@ def append_alert_log(config, alert, trade_plan, discord_sent, state):
     _update_paper_position(state, event)
 
     log_path = config["styles"][alert["trade_style"]]["trade_log"]
+    _maybe_migrate_data_file(config, log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     file_exists = log_path.exists()
     with log_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(event.keys()))
@@ -324,3 +329,19 @@ def _parse_iso(value):
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _maybe_migrate_data_file(config, target_path):
+    if target_path.exists():
+        return
+    legacy_dir = config.get("legacy_data_dir")
+    if not legacy_dir:
+        return
+    legacy_path = legacy_dir / target_path.name
+    if not legacy_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(legacy_path, target_path)
+    except Exception:
+        pass

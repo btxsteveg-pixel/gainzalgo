@@ -17,11 +17,13 @@ def load_config():
     _load_dotenv()
 
     base_dir = Path(__file__).resolve().parent.parent
-    data_dir = base_dir / os.getenv("DATA_DIR", "data")
+    legacy_data_dir = base_dir / "data"
+    data_dir = _resolve_data_dir(base_dir, legacy_data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
     return {
         "base_dir": base_dir,
+        "legacy_data_dir": legacy_data_dir,
         "data_dir": data_dir,
         "secret": os.getenv("TRADINGVIEW_WEBHOOK_SECRET", ""),
         "host": os.getenv("TV_WEBHOOK_HOST", "0.0.0.0"),
@@ -117,6 +119,9 @@ def load_config():
                 "dte_min": int(os.getenv("DEFAULT_LOTTO_DTE_MIN", "0")),
                 "dte_max": int(os.getenv("DEFAULT_LOTTO_DTE_MAX", "7")),
                 "risk_pct": float(os.getenv("LOTTO_RISK_PCT", "0.5")),
+                "contract_tp1_pct": float(os.getenv("LOTTO_CONTRACT_TP1_PCT", "30")),
+                "contract_tp2_pct": float(os.getenv("LOTTO_CONTRACT_TP2_PCT", "50")),
+                "contract_stop_pct": float(os.getenv("LOTTO_CONTRACT_STOP_PCT", "30")),
                 "cooldown_seconds": int(os.getenv("LOTTO_COOLDOWN_SECONDS", "900")),
                 # Delta range for lotto. 0.25-0.40 = OTM with real movement potential.
                 "delta_min": float(os.getenv("LOTTO_DELTA_MIN", "0.25")),
@@ -196,3 +201,16 @@ def _allowed_symbols(value):
         if symbol not in symbols:
             symbols.append(symbol)
     return symbols
+
+
+def _resolve_data_dir(base_dir, legacy_data_dir):
+    configured = str(os.getenv("DATA_DIR", "")).strip()
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else base_dir / path
+
+    render_data_root = Path("/var/data")
+    if render_data_root.exists():
+        return render_data_root / "gainzalgo_monster"
+
+    return legacy_data_dir

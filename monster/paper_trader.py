@@ -21,6 +21,7 @@ Enable/disable with PAPER_TRADING_ENABLED=true/false in .env.
 
 import json
 import logging
+import shutil
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -123,6 +124,7 @@ def _empty_state():
 
 def _load_state(config):
     path = _state_path(config)
+    _maybe_migrate_paper_state(config, path)
     if not path.exists():
         return _empty_state()
     try:
@@ -133,9 +135,27 @@ def _load_state(config):
 
 def _save_state(config, state):
     try:
-        _state_path(config).write_text(json.dumps(state, indent=2))
+        path = _state_path(config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2))
     except Exception as exc:
         logger.error(f"Paper state save failed: {exc}")
+
+
+def _maybe_migrate_paper_state(config, target_path):
+    if target_path.exists():
+        return
+    legacy_dir = config.get("legacy_data_dir")
+    if not legacy_dir:
+        return
+    legacy_path = legacy_dir / target_path.name
+    if not legacy_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(legacy_path, target_path)
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -434,6 +454,16 @@ def _trail_stop_hit(position, contract_price):
     return contract_price <= trailing_stop_price
 
 
+def _contract_return_pct(position, contract_price):
+    entry = position.get("entry_contract_price")
+    if entry in (None, "", 0) or contract_price in (None, "", 0):
+        return None
+    try:
+        return ((float(contract_price) - float(entry)) / float(entry)) * 100.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def _hold_days_expired(position, hold_days_max):
     entered_at = _parse_iso_datetime(position.get("entered_at"))
     if not entered_at or hold_days_max in (None, 0):
@@ -474,9 +504,13 @@ def _monitor_loop(config):
                     style = pos.get("style", "LOTTO")
                     style_cfg = config["styles"].get(style, {})
                     is_swing = style == "SWING"
+                    is_lotto = style == "LOTTO"
                     trailing_stop_pct = float(style_cfg.get("trailing_stop_pct", 0.0) or 0.0)
                     trailing_stop_enabled = bool(style_cfg.get("trailing_stop_enabled")) and is_swing
                     hold_days_max = style_cfg.get("hold_days_max") if is_swing else None
+                    lotto_tp1_pct = float(style_cfg.get("contract_tp1_pct", 30.0) or 0.0)
+                    lotto_tp2_pct = float(style_cfg.get("contract_tp2_pct", 50.0) or 0.0)
+                    lotto_stop_pct = float(style_cfg.get("contract_stop_pct", 30.0) or 0.0)
 
                     # ── Force close at 3:55 PM ET (LOTTO only) ────────────
                     if force_close and _should_force_close_position(pos, force_close):
@@ -499,6 +533,7 @@ def _monitor_loop(config):
                     underlying = _live_underlying_price(config, symbol)
                     opt_sym = pos.get("option_symbol")
                     contract_px = _live_contract_price(config, opt_sym) if opt_sym else None
+                    contract_return_pct = _contract_return_pct(pos, contract_px)
 
                     hit_tp = hit_sl = False
                     if underlying is not None and tp is not None and sl is not None:
@@ -533,6 +568,53 @@ def _monitor_loop(config):
                         )
                         newly_closed.append(closed)
                         _mark_tp1_trim(pos, closed, trailing_stop_pct if trailing_stop_enabled else 0.0)
+                        still_open.append(pos)
+                        continue
+
+                    if is_lotto and contract_return_pct is not None and contract_return_pct <= -abs(lotto_stop_pct):
+                        closed, pnl = _close_position(
+                            config,
+                            pos,
+                            f"Contract SL hit ({contract_return_pct:+.1f}%)",
+                        )
+                        newly_closed.append(closed)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                        continue
+
+                    if is_lotto and contract_return_pct is not None and contract_return_pct >= lotto_tp2_pct:
+                        closed, pnl = _close_position(
+                            config,
+                            pos,
+                            f"Contract TP2 hit (+{lotto_tp2_pct:.0f}%)",
+                        )
+                        newly_closed.append(closed)
+                        _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                        continue
+
+                    if is_lotto and contract_return_pct is not None and contract_return_pct >= lotto_tp1_pct and not pos.get("tp1_hit"):
+                        contracts_remaining = int(pos.get("contracts", 1) or 1)
+                        if contracts_remaining <= 1:
+                            closed, pnl = _close_position(
+                                config,
+                                pos,
+                                f"Contract TP1 hit (+{lotto_tp1_pct:.0f}%)",
+                                status="tp1_hit",
+                            )
+                            newly_closed.append(closed)
+                            _update_stats(state, closed, closed.get("realized_pnl_to_date", pnl))
+                            continue
+
+                        remainder = max(1, contracts_remaining // 2)
+                        contracts_to_trim = contracts_remaining - remainder
+                        closed, pnl = _close_position(
+                            config,
+                            pos,
+                            f"Contract TP1 hit — trimmed {contracts_to_trim}/{contracts_remaining} (+{lotto_tp1_pct:.0f}%)",
+                            contracts_to_close=contracts_to_trim,
+                            status="trimmed",
+                        )
+                        newly_closed.append(closed)
+                        _mark_tp1_trim(pos, closed, 0.0)
                         still_open.append(pos)
                         continue
 

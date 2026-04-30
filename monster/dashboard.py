@@ -2238,6 +2238,20 @@ def _paper_section(paper):
         except (TypeError, ValueError, ZeroDivisionError):
             return None
 
+    def one_contract_live_total(items):
+        values = [
+            one_contract_pnl(item.get("entry_contract_price"), item.get("current_contract_price"))
+            for item in items
+        ]
+        values = [value for value in values if value is not None]
+        return round(sum(values), 2) if values else 0.0
+
+    def average_live_pct(items):
+        values = [item.get("live_pnl_pct") for item in items if item.get("live_pnl_pct") not in (None, "")]
+        if not values:
+            return None
+        return round(sum(float(value) for value in values) / len(values), 2)
+
     def open_rows_for(items):
         if not items:
             return "<div style='color:#555;font-size:13px;padding:12px 0'>No open positions</div>"
@@ -2342,6 +2356,10 @@ def _paper_section(paper):
         win_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) > 0)
         loss_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) <= 0)
         wr = round((win_count / len(closed_items)) * 100) if closed_items else 0
+        one_ct_live = one_contract_live_total(open_items)
+        avg_live = average_live_pct(open_items)
+        one_ct_text = fmt_pnl(one_ct_live)
+        avg_live_text = _fmt_pct(avg_live) if avg_live is not None else "N/A"
         return f"""
           <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
@@ -2351,11 +2369,13 @@ def _paper_section(paper):
             <div style="font-size:11px;color:#777;line-height:1.45;margin-bottom:12px">
               Dollar P&amp;L reflects actual sized contracts. Gray sublines show percent return and the 1-contract equivalent so you can compare signal quality across names.
             </div>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px">
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Win Rate</div><div style="font-size:18px;font-weight:600">{wr}%</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Open</div><div style="font-size:18px;font-weight:600">{len(open_items)}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">W / L</div><div style="font-size:18px;font-weight:600">{win_count}/{loss_count}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">1CT Live</div><div style="font-size:18px;font-weight:600;color:{pnl_color(one_ct_live)}">{one_ct_text}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Avg Live %</div><div style="font-size:18px;font-weight:600;color:{'#00e676' if (avg_live or 0) >= 0 else '#ff1744'}">{avg_live_text}</div></div>
             </div>
             <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Open Positions</div>
             {open_rows_for(open_items)}
