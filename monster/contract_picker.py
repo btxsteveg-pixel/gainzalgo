@@ -27,6 +27,7 @@ from monster.options_data import (
     _swing_preferred_otm_distance,
     _target_expiry,
 )
+from monster.sidecar_universe import get_sidecar_themes
 
 
 def render_contract_picker(config, public_base_url=None, params=None):
@@ -218,7 +219,7 @@ def render_contract_picker(config, public_base_url=None, params=None):
           font-weight: 800;
           cursor: pointer;
         }}
-        .summary-grid, .quick-grid, .pick-grid {{
+        .summary-grid, .quick-grid, .pick-grid, .scout-grid {{
           display: grid;
           gap: 10px;
         }}
@@ -234,11 +235,33 @@ def render_contract_picker(config, public_base_url=None, params=None):
           grid-template-columns: repeat(3, minmax(0, 1fr));
           margin-bottom: 16px;
         }}
+        .scout-grid {{
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          margin-bottom: 16px;
+        }}
         .summary-card, .pick-card {{
           border-radius: 16px;
           border: 1px solid rgba(128, 211, 255, 0.10);
           background: rgba(10, 13, 20, 0.88);
           padding: 14px;
+        }}
+        .theme-card {{
+          border-radius: 16px;
+          border: 1px solid rgba(128, 211, 255, 0.10);
+          background: rgba(10, 13, 20, 0.88);
+          padding: 14px;
+        }}
+        .theme-title {{
+          color: #eefaff;
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 0.03em;
+          margin-bottom: 10px;
+        }}
+        .chip-cloud {{
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
         }}
         .value {{
           font-size: 30px;
@@ -372,6 +395,9 @@ def render_contract_picker(config, public_base_url=None, params=None):
           .hero {{
             grid-template-columns: 1fr;
           }}
+          .scout-grid {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }}
           .pick-grid {{
             grid-template-columns: 1fr;
           }}
@@ -384,7 +410,7 @@ def render_contract_picker(config, public_base_url=None, params=None):
             align-items: flex-start;
             flex-direction: column;
           }}
-          .form-grid, .summary-grid, .quick-grid {{
+          .form-grid, .summary-grid, .quick-grid, .scout-grid {{
             grid-template-columns: 1fr;
           }}
           .candidate-table .table-head, .candidate-table .row {{
@@ -414,7 +440,7 @@ def render_contract_picker(config, public_base_url=None, params=None):
           <section class="hero-card">
             <div class="eyebrow">Picker Input</div>
             <div class="hero-title">Find the contract without guessing.</div>
-            <div class="hero-copy">This page uses the same Alpaca contract engine, expiry window, and liquidity filters that your live LOTTO and SWING alerts already use. Primary is the closest match to your live engine. Safer is the cleaner contract. Aggressive is the cheaper stretch.</div>
+            <div class="hero-copy">This page uses the same Alpaca contract engine, expiry window, and liquidity filters that your live LOTTO and SWING alerts already use. It is not capped to the current TradingView roster, so you can scout a broader sidecar universe without touching the live alert engine. Primary is the closest match to your live engine. Safer is the cleaner contract. Aggressive is the cheaper stretch.</div>
             <form method="get" action="/contract-picker">
               <div class="form-grid">
                 <label>
@@ -496,6 +522,16 @@ def render_contract_picker(config, public_base_url=None, params=None):
               </div>
             </div>
           </section>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div class="section-title">Scout Universe</div>
+            <div class="section-note">Broader liquid names outside the live alert roster</div>
+          </div>
+          <div class="scout-grid">
+            {_scout_sections(trade_style, contract_side, confidence)}
+          </div>
         </section>
 
         <section class="pick-grid">
@@ -592,6 +628,30 @@ def _contract_picker_payload(config, symbol, trade_style, contract_side, confide
         "aggressive": aggressive,
         "candidates": candidates[:8],
     }, ""
+
+
+def _scout_sections(trade_style, contract_side, confidence):
+    sections = []
+    for label, symbols in get_sidecar_themes():
+        chips = []
+        for symbol in symbols:
+            href = (
+                "/contract-picker"
+                f"?symbol={quote_plus(symbol)}"
+                f"&style={quote_plus(trade_style)}"
+                f"&contract_side={quote_plus(contract_side)}"
+                f"&confidence={quote_plus(str(int(confidence) if float(confidence).is_integer() else confidence))}"
+            )
+            chips.append(f"<a class='chip' href='{escape(href)}'>{escape(symbol)}</a>")
+        sections.append(
+            f"""
+            <section class="theme-card">
+              <div class="theme-title">{escape(label)}</div>
+              <div class="chip-cloud">{''.join(chips)}</div>
+            </section>
+            """
+        )
+    return "".join(sections)
 
 
 def _rank_lotto_candidates(config, contracts, snapshots, underlying_price, target_expiry, contract_type, strike_anchor, style):

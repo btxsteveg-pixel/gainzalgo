@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from monster.news_radar import get_news_radar
 from monster.options_data import alpaca_enabled, fetch_stock_snapshots, _extract_stock_price
+from monster.sidecar_universe import get_sidecar_symbols
 
 
 HIDDEN_SYMBOLS = {"BTCUSD", "BTCUSDT", "ETHUSD", "ETHUSDT"}
@@ -471,7 +472,7 @@ def render_morning_desk(config, public_base_url=None):
           <section class="panel">
             <div class="section-head">
               <div class="section-title">Mover Board</div>
-              <div class="section-note">Advisory only • does not filter live alerts</div>
+              <div class="section-note">Advisory only • broader sidecar universe • does not filter live alerts</div>
             </div>
             <div class="table movers">
               <div class="table-head">
@@ -503,9 +504,9 @@ def render_morning_desk(config, public_base_url=None):
 def _build_board(config):
     records = []
     symbols = [
-        symbol for symbol in (config.get("allowed_symbols") or [])
+        symbol for symbol in get_sidecar_symbols(config, limit=72)
         if symbol not in HIDDEN_SYMBOLS
-    ][:48]
+    ]
 
     if alpaca_enabled(config) and symbols:
         try:
@@ -577,8 +578,8 @@ def _build_board(config):
         "plan": plan,
         "lotto_note": _lane_note("LOTTO", lotto_candidates),
         "swing_note": _lane_note("SWING", swing_candidates),
-        "lotto_chips": _watch_chips(lotto_candidates, empty_text="Waiting on tape"),
-        "swing_chips": _watch_chips(swing_candidates, empty_text="Waiting on tape"),
+        "lotto_chips": _watch_chips("LOTTO", lotto_candidates, empty_text="Waiting on tape"),
+        "swing_chips": _watch_chips("SWING", swing_candidates, empty_text="Waiting on tape"),
         "rows": "".join(_mover_row(item) for item in movers) or (
             "<div class='empty'>Morning Desk needs Alpaca stock snapshots and live market data.</div>"
         ),
@@ -665,10 +666,12 @@ def _mover_row(item):
     gap_class = _pnl_class(item.get("gap_pct"))
     lane_fit = str(item.get("lane_fit") or "WATCH").upper()
     lane_class = lane_fit.lower()
+    picker_style = "SWING" if lane_fit == "SWING" else "LOTTO"
+    picker_href = _picker_href(str(item.get("symbol") or ""), picker_style, item.get("gap_pct"))
     return f"""
     <div class="row">
       <div>
-        <div class="symbol">{escape(str(item.get("symbol") or "N/A"))}</div>
+        <div class="symbol"><a class="headline-link" href="{escape(picker_href)}">{escape(str(item.get("symbol") or "N/A"))}</a></div>
         <div class="subline">Min {_fmt_compact_int(item.get("minute_volume"))} • DV {_fmt_money_compact(item.get("dollar_volume"))}</div>
       </div>
       <div>{escape(_fmt(item.get("price")))}</div>
@@ -745,13 +748,14 @@ def _lane_note(lane, items):
     )
 
 
-def _watch_chips(items, empty_text):
+def _watch_chips(lane, items, empty_text):
     if not items:
         return f"<div class='watch-chip'>{escape(empty_text)}</div>"
     chips = []
     for item in items:
+        href = _picker_href(item["symbol"], lane, item.get("gap_pct"))
         chips.append(
-            f"<div class='watch-chip'>{escape(item['symbol'])}<span>{escape(_fmt_signed_pct(item.get('gap_pct')))}</span></div>"
+            f"<a class='watch-chip' href='{escape(href)}'>{escape(item['symbol'])}<span>{escape(_fmt_signed_pct(item.get('gap_pct')))}</span></a>"
         )
     return "".join(chips)
 
@@ -764,6 +768,12 @@ def _merge_focus_lists(lotto_candidates, swing_candidates, movers):
             if symbol and symbol not in seen:
                 seen.append(symbol)
     return seen[:10]
+
+
+def _picker_href(symbol, lane, gap_pct):
+    lane = "SWING" if str(lane or "").upper() == "SWING" else "LOTTO"
+    contract_side = "PUT" if float(gap_pct or 0.0) < 0 else "CALL"
+    return f"/contract-picker?symbol={escape(str(symbol or '').upper())}&style={lane}&contract_side={contract_side}"
 
 
 def _news_rows(items):
