@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from monster.dashboard import _execution_funnel, _lane_analytics
-from monster.discord_sender import _extract_strike_from_symbol, _fmt_contract_expiry, _title_icon, _should_skip_discord_alert
+from monster.discord_sender import _extract_strike_from_symbol, _fmt_contract_expiry, _title_icon, _should_skip_discord_alert, _fire_suffix
 from monster.options_flow import _classify_time_and_sale_side, _select_sold_alerts_for_posting
 from monster.paper_trader import _should_force_close_position
 
@@ -30,6 +30,10 @@ class DiscordFormattingTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_fire_suffix_only_shows_for_high_conviction(self):
+        self.assertEqual(_fire_suffix({"fire_confidence": 85}, {"confidence": 90}), " 🔥")
+        self.assertEqual(_fire_suffix({"fire_confidence": 85}, {"confidence": 84.99}), "")
 
 
 class DashboardAnalyticsTests(unittest.TestCase):

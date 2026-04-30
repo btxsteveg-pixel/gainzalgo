@@ -21,6 +21,7 @@ def send_discord_alert(config, alert, trade_plan):
     symbol = str(alert.get("symbol") or "N/A").upper()
     contract_side = str(trade_plan.get("contract_side") or "").upper()
     title_icon = _title_icon(alert["trade_style"], contract_side)
+    fire_suffix = _fire_suffix(style_config, alert)
     fields = [
         _field("Symbol", symbol, True),
         _field("Strike Price", _fmt_money(_extract_strike_from_symbol(trade_plan.get("option_symbol"))), True),
@@ -33,7 +34,7 @@ def send_discord_alert(config, alert, trade_plan):
         "embeds": [
             {
                 "author": {"name": f"GainzAlgo Monster • {alert['trade_style']} Lane"},
-                "title": f"{title_icon} {symbol} • {contract_side}",
+                "title": f"{title_icon} {symbol} • {contract_side}{fire_suffix}",
                 "fields": fields,
                 "color": 0x00E676 if alert["side"] == "BUY" else 0xFF1744,
                 "footer": {"text": _footer_text(alert, trade_plan)},
@@ -88,6 +89,14 @@ def _title_icon(trade_style, contract_side):
     if side == "CALL":
         return "🟢"
     return "🔴"
+
+
+def _fire_suffix(style_config, alert):
+    threshold = _safe_float((style_config or {}).get("fire_confidence"))
+    confidence = _safe_float((alert or {}).get("confidence"))
+    if threshold is None or confidence is None:
+        return ""
+    return " 🔥" if confidence >= threshold else ""
 
 
 def _fmt_source(pricing_source, contract_price_source):
@@ -225,6 +234,13 @@ def _fmt_timestamp(value):
     if "T" in text:
         text = text.replace("T", " ")
     return text[:16]
+
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _post_with_retry(req, timeout_seconds, max_retries, retry_backoff_seconds):
