@@ -376,6 +376,7 @@ def render_morning_desk(config, public_base_url=None):
           <div class="nav">
             <a class="pill" href="/dashboard">Main Dashboard</a>
             <a class="pill active" href="/morning-desk">Morning Desk</a>
+            <a class="pill" href="/contract-picker">Contract Picker</a>
             <div class="pill">{escape(phase["label"])}</div>
           </div>
         </section>

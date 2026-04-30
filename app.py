@@ -4,6 +4,7 @@ import threading
 from urllib.parse import parse_qs, urlparse
 
 from monster.config import load_config
+from monster.contract_picker import render_contract_picker
 from monster.dashboard import render_dashboard
 from monster.morning_desk import render_morning_desk
 from monster.discord_sender import send_discord_alert
@@ -38,6 +39,7 @@ def _health_payload(request_base_url=None):
         "styles": list(styles.keys()),
         "dashboard": "/dashboard",
         "morning_desk": "/morning-desk",
+        "contract_picker": "/contract-picker",
         "paper_trading_enabled": bool(config.get("paper_trading_enabled", True)),
         "modules": {
             "discord_alerts": {
@@ -151,7 +153,7 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         route_path = self._route_path()
-        if route_path in {"/", "/dashboard", "/morning-desk"}:
+        if route_path in {"/", "/dashboard", "/morning-desk", "/contract-picker"}:
             return self._head_response(200, "text/html; charset=utf-8")
         if route_path == "/health":
             return self._head_response(200, "application/json")
@@ -195,6 +197,17 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
         if route_path == "/morning-desk":
             html = render_morning_desk(config, self._public_base_url())
+            encoded = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "text/html; charset=utf-8")
+            self.send_header("content-length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
+
+        if route_path == "/contract-picker":
+            params = parse_qs(urlparse(str(self.path or "")).query)
+            html = render_contract_picker(config, self._public_base_url(), params)
             encoded = html.encode("utf-8")
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")

@@ -471,6 +471,7 @@ def render_dashboard(config, public_base_url=None):
             <div class="ticker-pill">SWING • control pace</div>
             <div class="ticker-pill">{escape(_route_label(webhook_base_url))}</div>
             <a class="ticker-pill" href="/morning-desk">Morning Desk</a>
+            <a class="ticker-pill" href="/contract-picker">Contract Picker</a>
             <div class="ticker-pill">{escape(focus_list)}</div>
           </div>
         </section>
