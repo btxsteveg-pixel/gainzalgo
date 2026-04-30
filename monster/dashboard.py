@@ -157,6 +157,7 @@ def render_dashboard(config, public_base_url=None):
           border: 1px solid rgba(206, 17, 38, 0.16);
           color: #f3c7ce;
           font-size: 12px;
+          text-decoration: none;
         }}
         .chip.good {{ color: #8cffb0; border-color: rgba(118,255,163,.22); }}
         .chip.warn {{ color: #ffd37e; border-color: rgba(255,211,126,.22); }}
@@ -469,6 +470,7 @@ def render_dashboard(config, public_base_url=None):
             <div class="ticker-pill">LOTTO • red zone</div>
             <div class="ticker-pill">SWING • control pace</div>
             <div class="ticker-pill">{escape(_route_label(webhook_base_url))}</div>
+            <a class="ticker-pill" href="/morning-desk">Morning Desk</a>
             <div class="ticker-pill">{escape(focus_list)}</div>
           </div>
         </section>

@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 from monster.config import load_config
 from monster.dashboard import render_dashboard
+from monster.morning_desk import render_morning_desk
 from monster.discord_sender import send_discord_alert
 from monster.news_radar import ensure_news_monitor_running, post_news_radar
 from monster.router import normalize_alert, build_trade_plan
@@ -36,6 +37,7 @@ def _health_payload(request_base_url=None):
         "ok": True,
         "styles": list(styles.keys()),
         "dashboard": "/dashboard",
+        "morning_desk": "/morning-desk",
         "paper_trading_enabled": bool(config.get("paper_trading_enabled", True)),
         "modules": {
             "discord_alerts": {
@@ -149,7 +151,7 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         route_path = self._route_path()
-        if route_path in {"/", "/dashboard"}:
+        if route_path in {"/", "/dashboard", "/morning-desk"}:
             return self._head_response(200, "text/html; charset=utf-8")
         if route_path == "/health":
             return self._head_response(200, "application/json")
@@ -183,6 +185,16 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
         if route_path == "/dashboard":
             html = render_dashboard(config, self._public_base_url())
+            encoded = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "text/html; charset=utf-8")
+            self.send_header("content-length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
+
+        if route_path == "/morning-desk":
+            html = render_morning_desk(config, self._public_base_url())
             encoded = html.encode("utf-8")
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")
