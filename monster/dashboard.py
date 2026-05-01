@@ -946,6 +946,7 @@ def _alert_audit_rows(states, open_positions, closed_positions):
 def _alert_audit_events(states, open_positions, closed_positions):
     alerts = _collect_raw_alerts(states)
     errors = _collect_webhook_errors(states)
+    paper_errors = _collect_paper_errors(states)
     open_map, closed_map = _paper_signal_maps(open_positions, closed_positions)
     events = []
 
@@ -961,6 +962,7 @@ def _alert_audit_events(states, open_positions, closed_positions):
                 "alert": alert,
                 "open_position": open_map.get(signal_id),
                 "closed_position": closed_map.get(signal_id),
+                "paper_error": paper_errors.get(signal_id),
             }
         )
 
@@ -1007,12 +1009,13 @@ def _audit_row(item):
     alert = item.get("alert") or {}
     open_position = item.get("open_position") or {}
     closed_position = item.get("closed_position") or {}
+    paper_error = item.get("paper_error") or {}
     contract = _fmt_contract(alert.get("option_symbol"))
     if contract == "N/A":
         contract = str(alert.get("signal_id") or "No contract logged")
-    lifecycle = _audit_lifecycle(alert, open_position, closed_position)
+    lifecycle = _audit_lifecycle(alert, open_position, closed_position, paper_error)
     paper_html = _audit_paper_cell(open_position, closed_position)
-    outcome_html = _audit_outcome_cell(alert, open_position, closed_position)
+    outcome_html = _audit_outcome_cell(alert, open_position, closed_position, paper_error)
     return f"""
     <div class="row">
       <div>
@@ -1028,7 +1031,7 @@ def _audit_row(item):
     """
 
 
-def _audit_lifecycle(alert, open_position, closed_position):
+def _audit_lifecycle(alert, open_position, closed_position, paper_error=None):
     steps = ["Received"]
     if _has_real_contract_reference(alert):
         steps.append("Contract matched")
@@ -1041,6 +1044,8 @@ def _audit_lifecycle(alert, open_position, closed_position):
         steps.append("Paper closed")
     elif open_position:
         steps.append("Paper live")
+    elif paper_error:
+        steps.append("Paper failed")
     elif _has_real_contract_reference(alert) and alert.get("discord_sent"):
         steps.append("Paper pending")
 
@@ -1066,13 +1071,18 @@ def _audit_paper_cell(open_position, closed_position):
     return "<div class='audit-note'>No paper entry</div>"
 
 
-def _audit_outcome_cell(alert, open_position, closed_position):
+def _audit_outcome_cell(alert, open_position, closed_position, paper_error=None):
     if closed_position:
         reason = closed_position.get("exit_reason") or "Paper trade closed"
         return f"<div class='audit-note'>{escape(str(reason))}</div>"
     if open_position:
         status = open_position.get("status") or "OPEN"
         return f"<div><strong class='warn'>{escape(str(status))}</strong><div class='audit-note'>Paper position active</div></div>"
+    if paper_error:
+        return (
+            f"<div><strong class='down'>Paper Failed</strong>"
+            f"<div class='audit-note'>{escape(str(paper_error.get('message') or 'Unknown paper error'))}</div></div>"
+        )
     if not _has_real_contract_reference(alert):
         return f"<div><strong class='down'>Filtered</strong><div class='audit-note'>{escape(_contract_gap_reason(alert))}</div></div>"
     if not alert.get("discord_sent"):
@@ -1867,6 +1877,24 @@ def _latest_paper_error(states):
             latest = item
             latest_time = parsed
     return latest
+
+
+def _collect_paper_errors(states):
+    latest_by_signal = {}
+
+    for style, state in (states or {}).items():
+        for item in state.get("recent_paper_errors") or []:
+            if not item.get("message"):
+                continue
+            event = dict(item)
+            event.setdefault("trade_style", style)
+            signal_id = event.get("signal_id")
+            if signal_id:
+                previous = latest_by_signal.get(signal_id)
+                if not previous or (event.get("time") or "") >= (previous.get("time") or ""):
+                    latest_by_signal[signal_id] = event
+
+    return latest_by_signal
 
 
 def _focus_list(alerts, leaderboard):

@@ -728,11 +728,30 @@ def execute_paper_trade(config, alert, trade_plan):
     account_size = config.get("paper_account_size", 10000)
     risk_budget = round(account_size * (style_cfg["risk_pct"] / 100.0), 2)
     contract_price = trade_plan.get("contract_price")
+    planned_contracts = trade_plan.get("max_contracts")
 
-    if contract_price and float(contract_price) > 0:
-        contracts = max(1, int(risk_budget / (float(contract_price) * 100)))
+    if planned_contracts not in (None, ""):
+        try:
+            contracts = int(planned_contracts)
+        except (TypeError, ValueError):
+            contracts = 0
+    elif contract_price and float(contract_price) > 0:
+        contracts = int(risk_budget / (float(contract_price) * 100))
     else:
-        contracts = 1
+        contracts = 0
+
+    if contracts < 1:
+        contract_cost = trade_plan.get("contract_cost")
+        if contract_cost in (None, 0) and contract_price not in (None, 0):
+            contract_cost = round(float(contract_price) * 100, 2)
+        detail = (
+            f"contract cost ${float(contract_cost):.2f} exceeds risk budget ${risk_budget:.2f}"
+            if contract_cost not in (None, 0)
+            else f"no affordable contract found within risk budget ${risk_budget:.2f}"
+        )
+        logger.info(f"Paper trade skipped — {detail}")
+        record_paper_error(config, style, detail, alert)
+        return
 
     # ── Place the order ───────────────────────────────────────────────────
     order = _place_paper_order(config, option_symbol, contracts, side="buy")

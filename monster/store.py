@@ -197,7 +197,6 @@ def append_alert_log(config, alert, trade_plan, discord_sent, state):
     if alert["signal_id"] not in state.get("signal_ids", []):
         reserve_signal(config, alert, state)
     state["last_webhook_error"] = None
-    state["last_paper_error"] = None
     state["last_alert"] = event
     state["recent_alerts"] = (state.get("recent_alerts", []) + [event])[-config["max_recent_alerts"] :]
     _update_paper_position(state, event)
