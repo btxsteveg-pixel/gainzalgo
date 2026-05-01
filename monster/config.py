@@ -99,6 +99,7 @@ def load_config():
                 )
             ),
             "scan_secret":          os.getenv("FLOW_SCAN_SECRET", ""),
+            "scan_interval_seconds": int(os.getenv("FLOW_SCAN_INTERVAL_SECONDS", "120")),
             "enabled":              os.getenv("FLOW_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
         },
         "news": {
@@ -107,6 +108,13 @@ def load_config():
             "benzinga_api_key": os.getenv("BENZINGA_NEWS_API_KEY", "").strip(),
             "discord_webhook": os.getenv("NEWS_DISCORD_WEBHOOK", "").strip() or os.getenv("DISCORD_WEBHOOK_URL_NEWS", "").strip(),
             "scan_secret": os.getenv("NEWS_SCAN_SECRET", "").strip(),
+        },
+        "runtime": {
+            "is_render": bool(str(os.getenv("RENDER", "")).strip()),
+            "run_embedded_schedulers": os.getenv(
+                "RUN_EMBEDDED_SCHEDULERS",
+                "true" if str(os.getenv("RENDER", "")).strip() else "false",
+            ).strip().lower() in {"1", "true", "yes", "on"},
         },
         "styles": {
             "LOTTO": {

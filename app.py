@@ -22,8 +22,10 @@ from monster.store import (
 
 
 config = load_config()
-ensure_news_monitor_running(config)
 STATE_LOCK = threading.Lock()
+_FLOW_SCAN_LOCK = threading.Lock()
+_FLOW_MONITOR_THREAD = None
+_FLOW_MONITOR_LOCK = threading.Lock()
 
 
 def _health_payload(request_base_url=None):
@@ -41,6 +43,10 @@ def _health_payload(request_base_url=None):
         "morning_desk": "/morning-desk",
         "contract_picker": "/contract-picker",
         "paper_trading_enabled": bool(config.get("paper_trading_enabled", True)),
+        "runtime": {
+            "is_render": bool((config.get("runtime") or {}).get("is_render")),
+            "embedded_schedulers": bool((config.get("runtime") or {}).get("run_embedded_schedulers")),
+        },
         "modules": {
             "discord_alerts": {
                 "ready": bool(styles.get("LOTTO", {}).get("discord_webhook") and styles.get("SWING", {}).get("discord_webhook"))
@@ -89,6 +95,8 @@ def _run_heatmap_async():
 
 def _run_flow_scan_async():
     """Background thread target for /flow-scan endpoint."""
+    if not _FLOW_SCAN_LOCK.acquire(blocking=False):
+        return
     try:
         from monster.options_flow import run_flow_scan
         import logging
@@ -98,6 +106,8 @@ def _run_flow_scan_async():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).error(f"Options flow scan error: {exc}")
+    finally:
+        _FLOW_SCAN_LOCK.release()
 
 
 def _run_news_scan_async():
@@ -112,6 +122,29 @@ def _run_news_scan_async():
     except Exception as exc:
         import logging
         logging.getLogger(__name__).error(f"News radar scan error: {exc}")
+
+
+def _flow_monitor_loop():
+    import logging
+
+    while True:
+        try:
+            if (config.get("flow") or {}).get("enabled", True):
+                _run_flow_scan_async()
+        except Exception as exc:
+            logging.getLogger(__name__).error(f"Embedded flow monitor error: {exc}")
+
+        interval = max(60, int((config.get("flow") or {}).get("scan_interval_seconds") or 120))
+        threading.Event().wait(interval)
+
+
+def ensure_flow_monitor_running():
+    global _FLOW_MONITOR_THREAD
+    with _FLOW_MONITOR_LOCK:
+        if _FLOW_MONITOR_THREAD and _FLOW_MONITOR_THREAD.is_alive():
+            return
+        _FLOW_MONITOR_THREAD = threading.Thread(target=_flow_monitor_loop, name="flow-monitor", daemon=True)
+        _FLOW_MONITOR_THREAD.start()
 
 
 def _process_alert_async(alert):
@@ -382,6 +415,15 @@ class MonsterHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    runtime_cfg = config.get("runtime") or {}
+    if runtime_cfg.get("run_embedded_schedulers"):
+        try:
+            ensure_news_monitor_running(config)
+            ensure_flow_monitor_running()
+            print("Embedded Render schedulers started")
+        except Exception as exc:
+            print(f"Embedded scheduler startup warning: {exc}")
+
     # Start paper trading monitor if enabled
     if config.get("paper_trading_enabled", True):
         try:
