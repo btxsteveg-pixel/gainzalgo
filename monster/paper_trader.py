@@ -263,6 +263,60 @@ def _get_fill_price(config, order_id, fallback):
     return fallback
 
 
+def _build_position(alert, trade_plan, contracts, risk_budget, fill_price, order_id=None, entry_note=None):
+    return {
+        "id": alert["signal_id"],
+        "signal_id": alert["signal_id"],
+        "symbol": alert["symbol"],
+        "option_symbol": trade_plan.get("option_symbol"),
+        "side": trade_plan["contract_side"],  # CALL or PUT
+        "style": alert["trade_style"],
+        "initial_contracts": contracts,
+        "contracts": contracts,
+        "entry_contract_price": float(fill_price) if fill_price not in (None, "") else None,
+        "entry_underlying_price": trade_plan.get("underlying_reference_price"),
+        "current_underlying_price": trade_plan.get("underlying_reference_price"),
+        "current_contract_price": float(fill_price) if fill_price not in (None, "") else None,
+        "pricing_source": trade_plan.get("pricing_source"),
+        "contract_price_source": trade_plan.get("contract_price_source"),
+        "unrealized_pnl": 0.0,
+        "live_pnl_pct": 0.0,
+        "tp": alert.get("take_profit"),
+        "tp1": trade_plan.get("tp1"),
+        "tp2": trade_plan.get("tp2"),
+        "sl": alert.get("stop_loss"),
+        "hold_days_max": None,
+        "trailing_stop_enabled": False,
+        "trailing_stop_pct": None,
+        "tp1_hit": False,
+        "tp1_hit_at": None,
+        "highest_contract_price_since_tp1": None,
+        "trailing_stop_price": None,
+        "realized_pnl_to_date": 0.0,
+        "target_expiry": trade_plan.get("target_expiry"),
+        "risk_budget": risk_budget,
+        "alpaca_order_id": order_id,
+        "paper_entry_mode": "alpaca" if order_id else "synthetic",
+        "paper_entry_note": entry_note,
+        "status": "open",
+        "entered_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _record_open_position(config, position):
+    style = position.get("style") or "LOTTO"
+    with _state_lock:
+        state = _load_state(config)
+        existing_ids = {p["signal_id"] for p in state.get("open_positions", [])}
+        if position["signal_id"] in existing_ids:
+            logger.info(f"Paper trade skipped — duplicate signal {position['signal_id']}")
+            record_paper_error(config, style, f"duplicate signal {position['signal_id']}", {"signal_id": position["signal_id"], "symbol": position.get("symbol")})
+            return False
+        state["open_positions"].append(position)
+        _save_state(config, state)
+    return True
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # DISCORD EXIT NOTIFICATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -356,7 +410,7 @@ def _close_position(config, position, reason, *, contracts_to_close=None, status
     is_full_close = contracts_to_close >= remaining_contracts
     exit_price = None
 
-    if option_symbol:
+    if option_symbol and position.get("paper_entry_mode") != "synthetic":
         result = (
             _close_paper_position(config, option_symbol)
             if is_full_close
@@ -374,8 +428,8 @@ def _close_position(config, position, reason, *, contracts_to_close=None, status
                         pass
 
         # Fallback: pull live market price
-        if exit_price is None:
-            exit_price = _live_contract_price(config, option_symbol)
+    if option_symbol and exit_price is None:
+        exit_price = _live_contract_price(config, option_symbol)
 
     entry = position.get("entry_contract_price") or 0
     tranche_pnl = (
@@ -718,8 +772,23 @@ def execute_paper_trade(config, alert, trade_plan):
         return
 
     if not _is_market_hours():
-        logger.info("Paper trade skipped — outside market hours")
-        record_paper_error(config, style, "outside market hours", alert)
+        contracts = max(1, int(trade_plan.get("max_contracts") or 1))
+        fallback_price = trade_plan.get("contract_price")
+        position = _build_position(
+            alert,
+            trade_plan,
+            contracts,
+            0.0,
+            fallback_price,
+            order_id=None,
+            entry_note="Synthetic entry outside market hours",
+        )
+        if _record_open_position(config, position):
+            ensure_monitor_running(config)
+            logger.info(
+                f"Paper position opened synthetically outside market hours: "
+                f"{option_symbol} x{contracts}"
+            )
         return
 
     style_cfg = config["styles"][style]
@@ -741,75 +810,45 @@ def execute_paper_trade(config, alert, trade_plan):
         contracts = 0
 
     if contracts < 1:
-        contract_cost = trade_plan.get("contract_cost")
-        if contract_cost in (None, 0) and contract_price not in (None, 0):
-            contract_cost = round(float(contract_price) * 100, 2)
-        detail = (
-            f"contract cost ${float(contract_cost):.2f} exceeds risk budget ${risk_budget:.2f}"
-            if contract_cost not in (None, 0)
-            else f"no affordable contract found within risk budget ${risk_budget:.2f}"
-        )
-        logger.info(f"Paper trade skipped — {detail}")
-        record_paper_error(config, style, detail, alert)
-        return
+        contracts = 1
 
     # ── Place the order ───────────────────────────────────────────────────
     order = _place_paper_order(config, option_symbol, contracts, side="buy")
     if not order:
-        logger.error(f"Paper order placement failed for {option_symbol}")
-        record_paper_error(config, style, f"paper order placement failed for {option_symbol}", alert)
+        fallback_price = contract_price
+        position = _build_position(
+            alert,
+            trade_plan,
+            contracts,
+            risk_budget,
+            fallback_price,
+            order_id=None,
+            entry_note=f"Synthetic entry after Alpaca paper order failed for {option_symbol}",
+        )
+        if _record_open_position(config, position):
+            ensure_monitor_running(config)
+            logger.warning(f"Paper order failed; synthetic position opened for {option_symbol} x{contracts}")
         return
 
     order_id = order.get("id")
     fill_price = _get_fill_price(config, order_id, fallback=contract_price)
 
     # ── Record the open position ──────────────────────────────────────────
-    position = {
-        "id": alert["signal_id"],
-        "signal_id": alert["signal_id"],
-        "symbol": alert["symbol"],
-        "option_symbol": option_symbol,
-        "side": trade_plan["contract_side"],  # CALL or PUT
-        "style": style,
-        "initial_contracts": contracts,
-        "contracts": contracts,
-        "entry_contract_price": float(fill_price) if fill_price else None,
-        "entry_underlying_price": trade_plan.get("underlying_reference_price"),
-        "current_underlying_price": trade_plan.get("underlying_reference_price"),
-        "current_contract_price": float(fill_price) if fill_price else None,
-        "pricing_source": trade_plan.get("pricing_source"),
-        "contract_price_source": trade_plan.get("contract_price_source"),
-        "unrealized_pnl": 0.0,
-        "live_pnl_pct": 0.0,
-        "tp": alert.get("take_profit"),
-        "tp1": trade_plan.get("tp1"),
-        "tp2": trade_plan.get("tp2"),
-        "sl": alert.get("stop_loss"),
-        "hold_days_max": style_cfg.get("hold_days_max") if style == "SWING" else None,
-        "trailing_stop_enabled": bool(trade_plan.get("trailing_stop_enabled")),
-        "trailing_stop_pct": trade_plan.get("trailing_stop_pct"),
-        "tp1_hit": False,
-        "tp1_hit_at": None,
-        "highest_contract_price_since_tp1": None,
-        "trailing_stop_price": None,
-        "realized_pnl_to_date": 0.0,
-        "target_expiry": trade_plan.get("target_expiry"),
-        "risk_budget": risk_budget,
-        "alpaca_order_id": order_id,
-        "status": "open",
-        "entered_at": datetime.now(timezone.utc).isoformat(),
-    }
+    position = _build_position(
+        alert,
+        trade_plan,
+        contracts,
+        risk_budget,
+        fill_price,
+        order_id=order_id,
+        entry_note=None,
+    )
+    position["hold_days_max"] = style_cfg.get("hold_days_max") if style == "SWING" else None
+    position["trailing_stop_enabled"] = bool(trade_plan.get("trailing_stop_enabled"))
+    position["trailing_stop_pct"] = trade_plan.get("trailing_stop_pct")
 
-    with _state_lock:
-        state = _load_state(config)
-        # Prevent duplicate positions for the same signal
-        existing_ids = {p["signal_id"] for p in state.get("open_positions", [])}
-        if alert["signal_id"] in existing_ids:
-            logger.info(f"Paper trade skipped — duplicate signal {alert['signal_id']}")
-            record_paper_error(config, style, f"duplicate signal {alert['signal_id']}", alert)
-            return
-        state["open_positions"].append(position)
-        _save_state(config, state)
+    if not _record_open_position(config, position):
+        return
 
     ensure_monitor_running(config)
     if fill_price is not None:
