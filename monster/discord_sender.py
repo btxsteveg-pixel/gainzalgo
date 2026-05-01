@@ -24,6 +24,7 @@ def send_discord_alert(config, alert, trade_plan):
     fire_suffix = _fire_suffix(style_config, alert)
     fields = [
         _field("Symbol", symbol, True),
+        _field("Stock Price", _fmt_money(alert.get("price")), True),
         _field("Strike Price", _fmt_money(_extract_strike_from_symbol(trade_plan.get("option_symbol"))), True),
         _field("Contract Exp", _fmt_contract_expiry(trade_plan.get("target_expiry")), True),
         _field("Contract Price", _fmt_money(trade_plan.get("contract_price")), True),
