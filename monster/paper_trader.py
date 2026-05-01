@@ -30,6 +30,8 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from monster.store import record_paper_error
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -709,15 +711,17 @@ def execute_paper_trade(config, alert, trade_plan):
         return
 
     option_symbol = trade_plan.get("option_symbol")
+    style = alert["trade_style"]
     if not option_symbol:
         logger.info(f"Paper trade skipped — no contract for {alert.get('symbol')}")
+        record_paper_error(config, style, f"no contract for {alert.get('symbol')}", alert)
         return
 
     if not _is_market_hours():
         logger.info("Paper trade skipped — outside market hours")
+        record_paper_error(config, style, "outside market hours", alert)
         return
 
-    style = alert["trade_style"]
     style_cfg = config["styles"][style]
 
     # ── Size the position from config risk_pct ────────────────────────────
@@ -734,6 +738,7 @@ def execute_paper_trade(config, alert, trade_plan):
     order = _place_paper_order(config, option_symbol, contracts, side="buy")
     if not order:
         logger.error(f"Paper order placement failed for {option_symbol}")
+        record_paper_error(config, style, f"paper order placement failed for {option_symbol}", alert)
         return
 
     order_id = order.get("id")
@@ -782,6 +787,7 @@ def execute_paper_trade(config, alert, trade_plan):
         existing_ids = {p["signal_id"] for p in state.get("open_positions", [])}
         if alert["signal_id"] in existing_ids:
             logger.info(f"Paper trade skipped — duplicate signal {alert['signal_id']}")
+            record_paper_error(config, style, f"duplicate signal {alert['signal_id']}", alert)
             return
         state["open_positions"].append(position)
         _save_state(config, state)

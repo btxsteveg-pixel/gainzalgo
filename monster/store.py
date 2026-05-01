@@ -27,6 +27,8 @@ def load_style_state(config, trade_style):
             "last_updated": None,
             "last_webhook_error": None,
             "recent_webhook_errors": [],
+            "last_paper_error": None,
+            "recent_paper_errors": [],
             "last_alert": None,
             "recent_alerts": [],
             "signal_ids": [],
@@ -47,6 +49,8 @@ def load_style_state(config, trade_style):
     state.setdefault("closed_positions", [])
     state.setdefault("last_webhook_error", None)
     state.setdefault("recent_webhook_errors", [])
+    state.setdefault("last_paper_error", None)
+    state.setdefault("recent_paper_errors", [])
     last_error = state.get("last_webhook_error")
     if last_error:
         history = state.get("recent_webhook_errors") or []
@@ -93,6 +97,23 @@ def record_webhook_error(config, trade_style, error_message, payload=None):
     state["last_webhook_error"] = event
     state["recent_webhook_errors"] = (
         (state.get("recent_webhook_errors") or []) + [event]
+    )[-MAX_WEBHOOK_ERROR_HISTORY:]
+    save_style_state(config, trade_style, state)
+
+
+def record_paper_error(config, trade_style, error_message, payload=None):
+    if trade_style not in config["styles"]:
+        return
+    state = load_style_state(config, trade_style)
+    event = {
+        "time": datetime.now(timezone.utc).isoformat(),
+        "message": str(error_message),
+        "symbol": (payload or {}).get("symbol"),
+        "signal_id": (payload or {}).get("signal_id"),
+    }
+    state["last_paper_error"] = event
+    state["recent_paper_errors"] = (
+        (state.get("recent_paper_errors") or []) + [event]
     )[-MAX_WEBHOOK_ERROR_HISTORY:]
     save_style_state(config, trade_style, state)
 
@@ -176,6 +197,7 @@ def append_alert_log(config, alert, trade_plan, discord_sent, state):
     if alert["signal_id"] not in state.get("signal_ids", []):
         reserve_signal(config, alert, state)
     state["last_webhook_error"] = None
+    state["last_paper_error"] = None
     state["last_alert"] = event
     state["recent_alerts"] = (state.get("recent_alerts", []) + [event])[-config["max_recent_alerts"] :]
     _update_paper_position(state, event)

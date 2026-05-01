@@ -31,6 +31,7 @@ def render_dashboard(config, public_base_url=None):
     latest_alert = alerts[-1] if alerts else None
     last_sent_alert = _latest_discord_alert(alerts)
     latest_error = _latest_webhook_error(states)
+    latest_paper_error = _latest_paper_error(states)
     today = _summary_window(alerts, paper_closed_positions, timedelta(days=1))
     week = _summary_window(alerts, paper_closed_positions, timedelta(days=7))
     leaderboard = _leaderboard(alerts, paper_closed_positions)
@@ -38,7 +39,7 @@ def render_dashboard(config, public_base_url=None):
     lane_analytics = _lane_analytics(alerts, paper_open_positions, paper_closed_positions)
     execution_funnel = _execution_funnel(alerts, paper_open_positions, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
-    ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, webhook_base_url)
+    ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, latest_paper_error, webhook_base_url)
     settings_rows = _settings_rows(config)
     premarket = _premarket_advisory(config)
     news = get_news_radar(config)
@@ -1539,7 +1540,7 @@ def _execution_funnel(alerts, open_positions, closed_positions):
     }
 
 
-def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_error, webhook_base_url):
+def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_error, latest_paper_error, webhook_base_url):
     last_alert_time = alerts[-1].get("time") if alerts else None
     last_closed_time = closed_positions[-1].get("closed_at") if closed_positions else None
     rows = [
@@ -1564,8 +1565,12 @@ def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_er
         _ops_row(
             "Paper Trader",
             "LIVE" if config.get("paper_trading_enabled", True) else "OFF",
-            f"{len(open_positions)} open / {len(closed_positions)} closed",
-            last_closed_time,
+            (
+                latest_paper_error.get("message")
+                if latest_paper_error
+                else f"{len(open_positions)} open / {len(closed_positions)} closed"
+            ),
+            latest_paper_error.get("time") if latest_paper_error else last_closed_time,
         ),
         _ops_row(
             "Options Flow",
@@ -1835,6 +1840,23 @@ def _latest_webhook_error(states):
     latest_time = None
     for state in states.values():
         item = state.get("last_webhook_error") or {}
+        if not item.get("message"):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if symbol and symbol in DASHBOARD_HIDDEN_SYMBOLS:
+            continue
+        parsed = _parse_iso(item.get("time"))
+        if latest is None or (parsed and (latest_time is None or parsed > latest_time)):
+            latest = item
+            latest_time = parsed
+    return latest
+
+
+def _latest_paper_error(states):
+    latest = None
+    latest_time = None
+    for state in states.values():
+        item = state.get("last_paper_error") or {}
         if not item.get("message"):
             continue
         symbol = str(item.get("symbol") or "").strip().upper()

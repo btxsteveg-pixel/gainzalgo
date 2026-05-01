@@ -14,6 +14,7 @@ from monster.store import (
     append_alert_log,
     ensure_signal_is_new,
     load_style_state,
+    record_paper_error,
     record_webhook_error,
     reserve_signal,
     save_style_state,
@@ -161,6 +162,7 @@ def _process_alert_async(alert):
             except Exception as paper_exc:
                 import logging
                 logging.getLogger(__name__).error(f"Paper trade error: {paper_exc}")
+                record_paper_error(config, alert["trade_style"], paper_exc, alert)
 
         with STATE_LOCK:
             state = load_style_state(config, alert["trade_style"])
