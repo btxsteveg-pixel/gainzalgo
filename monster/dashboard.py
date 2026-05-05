@@ -2354,7 +2354,7 @@ def _paper_section(paper):
 
     def closed_rows_for(items):
         if not items:
-            return "<div style='color:#555;font-size:13px;padding:12px 0'>No closed trades yet</div>"
+            return "<div style='color:#555;font-size:13px;padding:12px 0'>No exit events yet</div>"
         rows = ""
         for p in items:
             sym     = escape(str(p.get("symbol", "")))
@@ -2363,6 +2363,14 @@ def _paper_section(paper):
             exit_px = p.get("exit_contract_price")
             rpnl    = p.get("realized_pnl", 0.0) or 0.0
             contracts = contracts_for(p, closed=True)
+            remaining_after = p.get("remaining_contracts_after")
+            exit_type = "Final Close"
+            if remaining_after not in (None, ""):
+                try:
+                    if int(remaining_after) > 0:
+                        exit_type = "Trim"
+                except (TypeError, ValueError):
+                    pass
             deployed = deployed_capital(entry, contracts)
             one_lot = one_contract_pnl(entry, exit_px) if exit_px is not None else None
             pct     = None
@@ -2382,13 +2390,14 @@ def _paper_section(paper):
             if deployed is not None:
                 exit_meta = f"{_fmt_money(deployed)} deployed"
             rows += f"""
-              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 90px 100px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 70px 60px 70px 90px 100px 100px;
                           gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.06);
                           font-size:12px;align-items:center">
                 <span style="font-weight:600">{sym}</span>
                 <span style="background:{'rgba(0,230,118,0.15)' if side=='CALL' else 'rgba(255,23,68,0.15)'};
                       color:{'#00e676' if side=='CALL' else '#ff1744'};padding:2px 6px;border-radius:4px;
                       font-size:10px;font-weight:600">{side}</span>
+                <span style="font-size:10px;color:#bbb;font-weight:600">{exit_type}</span>
                 <span style="font-weight:600">{contracts}</span>
                 <span>${entry:.2f}</span>
                 <span>{exit_text}<span style='display:block;font-size:10px;color:#666'>{exit_meta}</span></span>
@@ -2397,10 +2406,10 @@ def _paper_section(paper):
               </div>"""
         return f"""
             <div style="background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-              <div style="display:grid;grid-template-columns:80px 60px 60px 70px 90px 100px 100px;
+              <div style="display:grid;grid-template-columns:80px 60px 70px 60px 70px 90px 100px 100px;
                           gap:8px;padding:8px 10px;background:rgba(255,255,255,0.05);
                           font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">
-                <span>Symbol</span><span>Side</span><span>Qty</span><span>Entry</span><span>Exit</span><span>P&amp;L</span><span>Closed</span>
+                <span>Symbol</span><span>Side</span><span>Exit Type</span><span>Qty</span><span>Entry</span><span>Exit</span><span>P&amp;L</span><span>Closed</span>
               </div>
               {rows}
             </div>"""
@@ -2423,16 +2432,16 @@ def _paper_section(paper):
               Dollar P&amp;L reflects actual sized contracts. Gray sublines show percent return and the 1-contract equivalent so you can compare signal quality across names.
             </div>
             <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px">
-              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Completed Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Win Rate</div><div style="font-size:18px;font-weight:600">{wr}%</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Open</div><div style="font-size:18px;font-weight:600">{len(open_items)}</div></div>
-              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">W / L</div><div style="font-size:18px;font-weight:600">{win_count}/{loss_count}</div></div>
+              <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Exit W / L</div><div style="font-size:18px;font-weight:600">{win_count}/{loss_count}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">1CT Live</div><div style="font-size:18px;font-weight:600;color:{pnl_color(one_ct_live)}">{one_ct_text}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Avg Live %</div><div style="font-size:18px;font-weight:600;color:{'#00e676' if (avg_live or 0) >= 0 else '#ff1744'}">{avg_live_text}</div></div>
             </div>
             <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Open Positions</div>
             {open_rows_for(open_items)}
-            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 8px">Recent Closed</div>
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 8px">Recent Exit Events</div>
             {closed_rows_for(closed_items)}
           </div>"""
 
