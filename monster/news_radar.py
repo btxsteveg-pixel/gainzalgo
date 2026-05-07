@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import json
 from pathlib import Path
+import re
 import threading
 import time
 from urllib.parse import urlparse
@@ -35,6 +36,7 @@ RSS_FEEDS = [
 
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
+_IMAGE_CACHE = {}
 _MONITOR_THREAD = None
 _MONITOR_LOCK = threading.Lock()
 NEWS_STATE_FILENAME = "news_radar_state.json"
@@ -199,6 +201,13 @@ def _fetch_benzinga_news(api_key):
                 "title": str(item.get("title") or "").strip(),
                 "link": str(item.get("url") or "").strip(),
                 "published_at": _normalize_datetime(published_at),
+                "image_url": _normalize_image_url(
+                    item.get("image")
+                    or item.get("image_url")
+                    or item.get("imageUrl")
+                    or item.get("featured_image")
+                    or item.get("featuredImage")
+                ),
             }
         )
     return [item for item in results if item["title"] and item["link"]]
@@ -229,6 +238,7 @@ def _fetch_rss(url, source, mode):
                 "title": title,
                 "link": link,
                 "published_at": _normalize_datetime(published),
+                "image_url": _rss_image_url(node),
             }
         )
     return [item for item in items if item["title"] and item["link"]]
@@ -316,6 +326,7 @@ def _post_headline(webhook, item):
     link = str(item.get("link") or "").strip()
     source = str(item.get("source") or "News")
     published_at = _short_time(item.get("published_at"))
+    image_url = _headline_image_url(item)
     payload = {
         "username": "GainzAlgo News",
         "embeds": [
@@ -329,6 +340,8 @@ def _post_headline(webhook, item):
             }
         ],
     }
+    if image_url:
+        payload["embeds"][0]["image"] = {"url": image_url}
     body = json.dumps(payload).encode("utf-8")
     req = urllib_request.Request(
         webhook,
@@ -370,3 +383,77 @@ def _normalize_datetime(value):
         return parsedate_to_datetime(str(value)).astimezone(timezone.utc).isoformat()
     except (TypeError, ValueError, IndexError):
         return None
+
+
+def _normalize_image_url(value):
+    text = str(value or "").strip()
+    return text if text.startswith("http://") or text.startswith("https://") else None
+
+
+def _rss_image_url(node):
+    for attr_name in ("url", "href"):
+        media_node = node.find(f".//{{*}}content[@{attr_name}]")
+        if media_node is not None:
+            url = _normalize_image_url(media_node.get(attr_name))
+            if url:
+                return url
+
+    thumbnail = node.find(".//{*}thumbnail")
+    if thumbnail is not None:
+        url = _normalize_image_url(thumbnail.get("url"))
+        if url:
+            return url
+
+    enclosure = node.find("enclosure")
+    if enclosure is not None:
+        mime = str(enclosure.get("type") or "").lower()
+        if mime.startswith("image/") or not mime:
+            url = _normalize_image_url(enclosure.get("url"))
+            if url:
+                return url
+
+    description = _node_text(node, "description")
+    if description:
+        match = re.search(r"""<img[^>]+src=["']([^"']+)["']""", description, flags=re.IGNORECASE)
+        if match:
+            return _normalize_image_url(match.group(1))
+    return None
+
+
+def _headline_image_url(item):
+    direct = _normalize_image_url((item or {}).get("image_url"))
+    if direct:
+        return direct
+
+    link = str((item or {}).get("link") or "").strip()
+    if not link:
+        return None
+
+    cached = _IMAGE_CACHE.get(link)
+    if cached is not None:
+        return cached
+
+    resolved = _fetch_article_image(link)
+    _IMAGE_CACHE[link] = resolved
+    return resolved
+
+
+def _fetch_article_image(link):
+    req = urllib_request.Request(link, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"})
+    try:
+        with urllib_request.urlopen(req, timeout=8) as resp:
+            raw = resp.read(200000).decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    patterns = [
+        r"""<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']""",
+        r"""<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']""",
+        r"""<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']""",
+        r"""<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']""",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return _normalize_image_url(match.group(1))
+    return None
