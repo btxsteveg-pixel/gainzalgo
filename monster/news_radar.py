@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import threading
 import time
+from urllib.parse import urlparse
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -97,7 +98,8 @@ def post_news_radar(config):
         to_post.append(item)
 
     posted = 0
-    for item in to_post[:2]:
+    post_limit = max(1, int(news_cfg.get("post_limit") or 1))
+    for item in to_post[:post_limit]:
         if _post_headline(webhook, item):
             signature = _headline_signature(item)
             posted_signatures.add(signature)
@@ -112,6 +114,7 @@ def post_news_radar(config):
 def _build_payload(news_cfg):
     items = []
     source_labels = []
+    item_limit = max(1, int(news_cfg.get("item_limit") or DEFAULT_ITEM_LIMIT))
 
     benzinga_key = news_cfg.get("benzinga_api_key")
     if benzinga_key:
@@ -129,13 +132,15 @@ def _build_payload(news_cfg):
     deduped = []
     seen = set()
     for item in sorted(items, key=lambda row: row.get("published_at") or "", reverse=True):
+        if _is_blocked_item(item, news_cfg):
+            continue
         signature = (item.get("title"), item.get("link"))
         if signature in seen:
             continue
         seen.add(signature)
         deduped.append(item)
 
-    headlines = deduped[:DEFAULT_ITEM_LIMIT]
+    headlines = deduped[:item_limit]
     latest = headlines[0] if headlines else None
     mode = "Premium + official" if benzinga_key else "Official feeds"
     note = "Faster tape with Benzinga key" if not benzinga_key else "Premium feed active"
@@ -246,6 +251,26 @@ def _headline_signature(item):
     if not title or not link:
         return None
     return f"{title}|{link}"
+
+
+def _is_blocked_item(item, news_cfg):
+    title = str((item or {}).get("title") or "").strip().lower()
+    source = str((item or {}).get("source") or "").strip().lower()
+    link = str((item or {}).get("link") or "").strip()
+    host = urlparse(link).netloc.strip().lower() if link else ""
+
+    blocked_publishers = [str(value).strip().lower() for value in (news_cfg.get("blocked_publishers") or []) if str(value).strip()]
+    blocked_domains = [str(value).strip().lower() for value in (news_cfg.get("blocked_domains") or []) if str(value).strip()]
+
+    for blocked in blocked_publishers:
+        if blocked and (blocked in title or blocked in source):
+            return True
+
+    for blocked in blocked_domains:
+        if blocked and (host == blocked or host.endswith(f".{blocked}")):
+            return True
+
+    return False
 
 
 def _state_path(config):

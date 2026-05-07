@@ -81,9 +81,9 @@ def load_config():
             "daily_max_alerts":     int(os.getenv("FLOW_DAILY_MAX_ALERTS", "8")),
             "repeat_window_minutes": int(os.getenv("FLOW_REPEAT_WINDOW_MINUTES", "390")),
             "sold_min_premium":     float(os.getenv("FLOW_SOLD_MIN_PREMIUM", "250000")),
-            "sold_min_seller_share": float(os.getenv("FLOW_SOLD_MIN_SELLER_SHARE", "0.60")),
+            "sold_min_seller_share": float(os.getenv("FLOW_SOLD_MIN_SELLER_SHARE", "0.55")),
             "sold_candidate_limit": int(os.getenv("FLOW_SOLD_CANDIDATE_LIMIT", "40")),
-            "sold_window_seconds":  int(os.getenv("FLOW_SOLD_WINDOW_SECONDS", "8")),
+            "sold_window_seconds":  int(os.getenv("FLOW_SOLD_WINDOW_SECONDS", "30")),
             "sold_max_alerts":      int(os.getenv("FLOW_SOLD_MAX_ALERTS", "2")),
             "sold_max_alerts_per_symbol": int(
                 os.getenv("FLOW_SOLD_MAX_ALERTS_PER_SYMBOL", os.getenv("FLOW_MAX_ALERTS_PER_SYMBOL", "1"))
@@ -108,6 +108,16 @@ def load_config():
             "benzinga_api_key": os.getenv("BENZINGA_NEWS_API_KEY", "").strip(),
             "discord_webhook": os.getenv("NEWS_DISCORD_WEBHOOK", "").strip() or os.getenv("DISCORD_WEBHOOK_URL_NEWS", "").strip(),
             "scan_secret": os.getenv("NEWS_SCAN_SECRET", "").strip(),
+            "item_limit": int(os.getenv("NEWS_ITEM_LIMIT", "6")),
+            "post_limit": int(os.getenv("NEWS_POST_LIMIT", "1")),
+            "blocked_publishers": [
+                item.strip() for item in os.getenv("NEWS_BLOCKED_PUBLISHERS", "motley fool,motley").split(",")
+                if item.strip()
+            ],
+            "blocked_domains": [
+                item.strip().lower() for item in os.getenv("NEWS_BLOCKED_DOMAINS", "fool.com,www.fool.com,motleyfool.com,www.motleyfool.com").split(",")
+                if item.strip()
+            ],
         },
         "runtime": {
             "is_render": bool(str(os.getenv("RENDER", "")).strip()),
