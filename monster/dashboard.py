@@ -1,6 +1,8 @@
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from html import escape
+import json
+from pathlib import Path
 import re
 
 from monster.options_data import attach_live_pnl, alpaca_enabled, fetch_stock_snapshots, _extract_stock_price
@@ -39,7 +41,17 @@ def render_dashboard(config, public_base_url=None):
     lane_analytics = _lane_analytics(alerts, paper_open_positions, paper_closed_positions)
     execution_funnel = _execution_funnel(alerts, paper_open_positions, paper_closed_positions)
     webhook_base_url = _public_webhook_base_url(config, public_base_url)
-    ops_rows = _ops_health_rows(config, alerts, paper_open_positions, paper_closed_positions, latest_error, latest_paper_error, webhook_base_url)
+    flow_diagnostics = _flow_diagnostics(config)
+    ops_rows = _ops_health_rows(
+        config,
+        alerts,
+        paper_open_positions,
+        paper_closed_positions,
+        latest_error,
+        latest_paper_error,
+        webhook_base_url,
+        flow_diagnostics,
+    )
     settings_rows = _settings_rows(config)
     premarket = _premarket_advisory(config)
     news = get_news_radar(config)
@@ -367,6 +379,9 @@ def render_dashboard(config, public_base_url=None):
         .news-table .table-head, .news-table .row {{
           grid-template-columns: minmax(0, 1.4fr) minmax(96px, .8fr) minmax(96px, .8fr);
         }}
+        .flow-post-table .table-head, .flow-post-table .row {{
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(96px, .8fr) minmax(96px, .8fr) minmax(0, 1fr);
+        }}
         .alert-meta, .muted {{
           color: #c1a6ab;
           font-size: 12px;
@@ -544,6 +559,46 @@ def render_dashboard(config, public_base_url=None):
               <span>Area</span><span>Setting</span><span>Value</span><span>Purpose</span>
             </div>
             {settings_rows}
+          </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:16px;">
+          <div class="card-head" style="margin-bottom:10px;">
+            <div class="section-title" style="margin-bottom:0;">Options Flow Diagnostics</div>
+            <div class="muted">{escape(flow_diagnostics['headline'])}</div>
+          </div>
+          <div class="hero-grid" style="margin-bottom:14px;">
+            <div class="grid-stat"><span>Last Started</span><strong>{escape(_short_time(flow_diagnostics['last_started']))}</strong></div>
+            <div class="grid-stat"><span>Last Completed</span><strong>{escape(_short_time(flow_diagnostics['last_completed']))}</strong></div>
+            <div class="grid-stat"><span>Directional Posted Today</span><strong>{flow_diagnostics['directional_today']}</strong></div>
+            <div class="grid-stat"><span>Sold Posted Today</span><strong>{flow_diagnostics['sold_today']}</strong></div>
+            <div class="grid-stat"><span>Directional Scan</span><strong>{escape(flow_diagnostics['directional_scan'])}</strong></div>
+            <div class="grid-stat"><span>Sold Scan</span><strong>{escape(flow_diagnostics['sold_scan'])}</strong></div>
+          </div>
+          <div class="strip" style="margin-bottom:14px;">
+            <div><span>Directional Note</span><strong>{escape(flow_diagnostics['directional_note'])}</strong></div>
+            <div><span>Sold Note</span><strong>{escape(flow_diagnostics['sold_note'])}</strong></div>
+            <div><span>Last Error</span><strong class="{flow_diagnostics['error_class']}">{escape(flow_diagnostics['last_error'])}</strong></div>
+          </div>
+          <div class="layout" style="margin-bottom:0;">
+            <section>
+              <div class="section-title">Recent Bulls / Bears Posts</div>
+              <div class="table flow-post-table">
+                <div class="table-head">
+                  <span>Symbol</span><span>Contract</span><span>Premium</span><span>Posted</span><span>Note</span>
+                </div>
+                {flow_diagnostics['directional_rows']}
+              </div>
+            </section>
+            <section>
+              <div class="section-title">Recent Sold Premium Posts</div>
+              <div class="table flow-post-table">
+                <div class="table-head">
+                  <span>Symbol</span><span>Contract</span><span>Premium</span><span>Posted</span><span>Note</span>
+                </div>
+                {flow_diagnostics['sold_rows']}
+              </div>
+            </section>
           </div>
         </section>
 
@@ -1550,7 +1605,7 @@ def _execution_funnel(alerts, open_positions, closed_positions):
     }
 
 
-def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_error, latest_paper_error, webhook_base_url):
+def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_error, latest_paper_error, webhook_base_url, flow_diagnostics):
     last_alert_time = alerts[-1].get("time") if alerts else None
     last_closed_time = closed_positions[-1].get("closed_at") if closed_positions else None
     rows = [
@@ -1586,7 +1641,7 @@ def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_er
             "Options Flow",
             "LIVE" if _flow_ready(config) else "BLOCKED",
             _flow_detail(config),
-            None,
+            flow_diagnostics.get("last_completed") or flow_diagnostics.get("last_started"),
         ),
         _ops_row(
             "Heatmap",
@@ -2006,6 +2061,117 @@ def _discord_detail(config):
 def _alpaca_ready(config):
     alpaca = config.get("alpaca") or {}
     return bool(alpaca.get("api_key") and alpaca.get("secret_key"))
+
+
+def _flow_state_path(config):
+    data_dir = str(config.get("data_dir") or "data")
+    return Path(data_dir) / "flow_state.json"
+
+
+def _load_flow_state_snapshot(config):
+    path = _flow_state_path(config)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _flow_diagnostics(config):
+    flow = config.get("flow") or {}
+    state = _load_flow_state_snapshot(config)
+
+    directional_meta = state.get("last_scan_selection") or {}
+    sold_meta = state.get("last_sold_scan_selection") or {}
+    directional_posts = state.get("last_posted") or []
+    sold_posts = state.get("last_sold_posted") or []
+    last_error = str(state.get("last_scan_error") or "").strip()
+
+    return {
+        "headline": _flow_headline(flow, state),
+        "last_started": state.get("last_scan_started_at"),
+        "last_completed": state.get("last_scan_completed_at"),
+        "directional_today": int(state.get("daily_alert_count", 0) or 0),
+        "sold_today": int(state.get("sold_daily_alert_count", 0) or 0),
+        "directional_scan": _flow_scan_counts(
+            state.get("last_scan_candidate_count"),
+            state.get("last_scan_selected_count"),
+            state.get("last_scan_posted_count"),
+        ),
+        "sold_scan": _flow_scan_counts(
+            state.get("last_sold_scan_candidate_count"),
+            state.get("last_sold_scan_selected_count"),
+            state.get("last_sold_scan_posted_count"),
+        ),
+        "directional_note": _flow_selection_note(directional_meta, "directional"),
+        "sold_note": _flow_selection_note(sold_meta, "sold"),
+        "last_error": last_error or "Clear",
+        "error_class": "down" if last_error else "up",
+        "directional_rows": _flow_post_rows(directional_posts, sold=False),
+        "sold_rows": _flow_post_rows(sold_posts, sold=True),
+    }
+
+
+def _flow_headline(flow, state):
+    if not flow.get("enabled"):
+        return "Scanner disabled in config."
+    if state.get("last_scan_error"):
+        return "Last scan hit an error. Check the error tile before the next bell."
+    if state.get("last_scan_completed_at"):
+        return "Scanner is writing real scan state. Empty posts now usually mean filters, cooldowns, or no candidates."
+    return "Waiting for the first completed flow scan."
+
+
+def _flow_scan_counts(candidates, selected, posted):
+    return f"{int(candidates or 0)} / {int(selected or 0)} / {int(posted or 0)}"
+
+
+def _flow_selection_note(meta, lane_label):
+    if not meta:
+        return f"No {lane_label} selection data yet."
+
+    remaining_today = int(meta.get("remaining_today", 0) or 0)
+    skipped = meta.get("skipped") or {}
+    top_reasons = [
+        f"{reason.replace('_', ' ')} {count}"
+        for reason, count in sorted(skipped.items(), key=lambda item: item[1], reverse=True)
+        if count
+    ][:2]
+
+    parts = [f"Remaining today: {remaining_today}"]
+    if meta.get("ranked_by"):
+        parts.append(f"Ranked by {meta['ranked_by']}")
+    if top_reasons:
+        parts.append("Skipped: " + ", ".join(top_reasons))
+    return " • ".join(parts)
+
+
+def _flow_post_rows(items, sold=False):
+    rows = []
+    for item in items[:6]:
+        premium_value = item.get("seller_premium") if sold else item.get("premium")
+        note = (
+            f"Seller share {round(float(item.get('seller_share', 0.0)) * 100)}%"
+            if sold
+            else f"{str(item.get('opt_type') or '').upper()} • Vol {int(item.get('volume', 0) or 0):,}"
+        )
+        rows.append(
+            f"""
+            <div class="row">
+              <div>
+                <div class="alert-symbol">{escape(str(item.get('symbol') or 'N/A'))}</div>
+                <div class="alert-meta">{escape(str(item.get('expiry') or ''))}</div>
+              </div>
+              <div>{escape(_fmt_contract(item.get('contract_symbol')))}</div>
+              <div>{escape(_fmt_money(premium_value))}</div>
+              <div>{escape(_short_time(item.get('posted_at')))}</div>
+              <div class="alert-meta">{escape(note)}</div>
+            </div>
+            """
+        )
+    return "".join(rows) or "<div class='empty'>No recent posts yet</div>"
 
 
 def _flow_ready(config):
