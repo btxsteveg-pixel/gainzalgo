@@ -2013,7 +2013,7 @@ def _flow_ready(config):
     return bool(
         flow.get("enabled")
         and flow.get("tastytrade_username")
-        and flow.get("tastytrade_password")
+        and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
         and flow.get("bull_webhook")
         and flow.get("bear_webhook")
     )
@@ -2024,7 +2024,7 @@ def _flow_detail(config):
     if not flow.get("enabled"):
         return "Flow scanner disabled"
     missing = []
-    if not flow.get("tastytrade_username") or not flow.get("tastytrade_password"):
+    if not flow.get("tastytrade_username") or not (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token")):
         missing.append("Tastytrade auth")
     if not flow.get("bull_webhook") or not flow.get("bear_webhook"):
         missing.append("Bull/Bear webhooks")

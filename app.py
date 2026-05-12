@@ -62,10 +62,20 @@ def _health_payload(request_base_url=None):
                 "ready": bool(
                     flow.get("enabled", True)
                     and flow.get("tastytrade_username")
-                    and flow.get("tastytrade_password")
+                    and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
                     and flow.get("bull_webhook")
                     and flow.get("bear_webhook")
                 ),
+                "sold_ready": bool(
+                    flow.get("enabled", True)
+                    and flow.get("tastytrade_username")
+                    and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
+                    and flow.get("sold_calls_webhook")
+                    and flow.get("sold_puts_webhook")
+                ),
+                "sold_min_premium": flow.get("sold_min_premium"),
+                "sold_min_seller_share": flow.get("sold_min_seller_share"),
+                "sold_window_seconds": flow.get("sold_window_seconds"),
             },
             "heatmap": {
                 "enabled": bool(heatmap.get("enabled", True)),
