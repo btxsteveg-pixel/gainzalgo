@@ -26,16 +26,29 @@ The app now supports the hosted `PORT` environment variable automatically.
    - `TRADINGVIEW_WEBHOOK_SECRET`
    - `DISCORD_WEBHOOK_URL_LOTTO`
    - `DISCORD_WEBHOOK_URL_SWING`
+   - `FLOW_DISCORD_WEBHOOK_BULL`
+   - `FLOW_DISCORD_WEBHOOK_BEAR`
+   - `FLOW_DISCORD_WEBHOOK_SOLD_CALLS`
+   - `FLOW_DISCORD_WEBHOOK_SOLD_PUTS`
    - `ALPACA_API_KEY`
    - `ALPACA_SECRET_KEY`
    - `ALPACA_OPTIONS_FEED=opra`
+   - `TASTYTRADE_USERNAME`
+   - `TASTYTRADE_PASSWORD` or `TASTYTRADE_REMEMBER_TOKEN`
+   - `TASTYTRADE_OTP` if your account prompts for MFA during device verification
    - `TV_WEBHOOK_HOST=0.0.0.0`
    - `DATA_DIR=/var/data/gainzalgo`
    - `LOTTO_COOLDOWN_SECONDS`
    - `SWING_COOLDOWN_SECONDS`
    - `ALLOWED_SYMBOLS`
 
-5. Add a Render persistent disk mounted at `/var/data`.
+5. For options flow, confirm these live checks after deploy:
+   - `/health` shows `modules.options_flow.auth_ready: true`
+   - `/health` shows `modules.options_flow.directional_routes_ready: true`
+   - `/health` shows `modules.options_flow.sold_routes_ready: true`
+   - `/health` does not show `last_scan_error`
+
+6. Add a Render persistent disk mounted at `/var/data`.
    This is what keeps dashboard state and history from resetting on redeploy/restart.
 
 After deploy, Render gives you a stable public base URL like:
