@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
 import threading
 from urllib.parse import parse_qs, urlparse
 
@@ -29,14 +30,44 @@ _FLOW_MONITOR_THREAD = None
 _FLOW_MONITOR_LOCK = threading.Lock()
 
 
+def _flow_state_snapshot():
+    data_dir = str(config.get("data_dir") or "data")
+    path = Path(data_dir) / "flow_state.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _health_payload(request_base_url=None):
     styles = config.get("styles") or {}
     alpaca = config.get("alpaca") or {}
     flow = config.get("flow") or {}
     heatmap = config.get("heatmap") or {}
     news = config.get("news") or {}
+    flow_state = _flow_state_snapshot()
     public_base = request_base_url or config.get("public_base_url") or ""
     webhook_url = f"{public_base.rstrip('/')}/webhook/tradingview" if public_base else None
+    flow_auth_ready = bool(
+        flow.get("enabled", True)
+        and flow.get("tastytrade_username")
+        and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
+    )
+    directional_routes_ready = bool(flow.get("bull_webhook") and flow.get("bear_webhook"))
+    sold_routes_ready = bool(flow.get("sold_calls_webhook") and flow.get("sold_puts_webhook"))
+    flow_missing = []
+    if not flow_auth_ready:
+        flow_missing.append("tastytrade_auth")
+    if not directional_routes_ready:
+        flow_missing.append("directional_webhooks")
+    sold_missing = []
+    if not flow_auth_ready:
+        sold_missing.append("tastytrade_auth")
+    if not sold_routes_ready:
+        sold_missing.append("sold_webhooks")
     return {
         "ok": True,
         "styles": list(styles.keys()),
@@ -59,20 +90,16 @@ def _health_payload(request_base_url=None):
             },
             "options_flow": {
                 "enabled": bool(flow.get("enabled", True)),
-                "ready": bool(
-                    flow.get("enabled", True)
-                    and flow.get("tastytrade_username")
-                    and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
-                    and flow.get("bull_webhook")
-                    and flow.get("bear_webhook")
-                ),
-                "sold_ready": bool(
-                    flow.get("enabled", True)
-                    and flow.get("tastytrade_username")
-                    and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
-                    and flow.get("sold_calls_webhook")
-                    and flow.get("sold_puts_webhook")
-                ),
+                "ready": bool(flow.get("enabled", True) and flow_auth_ready and directional_routes_ready),
+                "sold_ready": bool(flow.get("enabled", True) and flow_auth_ready and sold_routes_ready),
+                "auth_ready": flow_auth_ready,
+                "directional_routes_ready": directional_routes_ready,
+                "sold_routes_ready": sold_routes_ready,
+                "auth_mode": "remember_token" if flow.get("tastytrade_remember_token") else ("password" if flow.get("tastytrade_password") else "missing"),
+                "missing": flow_missing,
+                "sold_missing": sold_missing,
+                "last_scan_completed_at": flow_state.get("last_scan_completed_at"),
+                "last_scan_error": flow_state.get("last_scan_error"),
                 "sold_min_premium": flow.get("sold_min_premium"),
                 "sold_min_seller_share": flow.get("sold_min_seller_share"),
                 "sold_window_seconds": flow.get("sold_window_seconds"),

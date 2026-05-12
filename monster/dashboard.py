@@ -1644,6 +1644,12 @@ def _ops_health_rows(config, alerts, open_positions, closed_positions, latest_er
             flow_diagnostics.get("last_completed") or flow_diagnostics.get("last_started"),
         ),
         _ops_row(
+            "Sold Premium Flow",
+            "LIVE" if _sold_flow_ready(config) else "BLOCKED",
+            _sold_flow_detail(config),
+            flow_diagnostics.get("last_completed") or flow_diagnostics.get("last_started"),
+        ),
+        _ops_row(
             "Heatmap",
             "LIVE" if _heatmap_ready(config) else "BLOCKED",
             _heatmap_detail(config),
@@ -2118,6 +2124,8 @@ def _flow_headline(flow, state):
     if not flow.get("enabled"):
         return "Scanner disabled in config."
     if state.get("last_scan_error"):
+        if "device_challenge_required" in str(state.get("last_scan_error") or ""):
+            return "Tastytrade is asking for device verification. Refresh auth first, then the flow lanes can post again."
         return "Last scan hit an error. Check the error tile before the next bell."
     if state.get("last_scan_completed_at"):
         return "Scanner is writing real scan state. Empty posts now usually mean filters, cooldowns, or no candidates."
@@ -2196,6 +2204,31 @@ def _flow_detail(config):
         missing.append("Bull/Bear webhooks")
     if not missing:
         return "Scanner configured with bull/bear routes"
+    return "Missing: " + ", ".join(missing)
+
+
+def _sold_flow_ready(config):
+    flow = config.get("flow") or {}
+    return bool(
+        flow.get("enabled")
+        and flow.get("tastytrade_username")
+        and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
+        and flow.get("sold_calls_webhook")
+        and flow.get("sold_puts_webhook")
+    )
+
+
+def _sold_flow_detail(config):
+    flow = config.get("flow") or {}
+    if not flow.get("enabled"):
+        return "Sold premium scanner disabled"
+    missing = []
+    if not flow.get("tastytrade_username") or not (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token")):
+        missing.append("Tastytrade auth")
+    if not flow.get("sold_calls_webhook") or not flow.get("sold_puts_webhook"):
+        missing.append("Sold call/put webhooks")
+    if not missing:
+        return "Scanner configured with sold-call and sold-put routes"
     return "Missing: " + ", ".join(missing)
 
 
