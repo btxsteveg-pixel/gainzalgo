@@ -2127,6 +2127,16 @@ def _flow_headline(flow, state):
         if "device_challenge_required" in str(state.get("last_scan_error") or ""):
             return "Tastytrade is asking for device verification. Refresh auth first, then the flow lanes can post again."
         return "Last scan hit an error. Check the error tile before the next bell."
+    if (
+        state.get("last_scan_completed_at")
+        and not int(state.get("last_scan_candidate_count", 0) or 0)
+        and not int(state.get("last_scan_selected_count", 0) or 0)
+        and not int(state.get("last_scan_posted_count", 0) or 0)
+        and not int(state.get("last_sold_scan_candidate_count", 0) or 0)
+        and not int(state.get("last_sold_scan_selected_count", 0) or 0)
+        and not int(state.get("last_sold_scan_posted_count", 0) or 0)
+    ):
+        return "Auth is live. If you are checking after the close, zeroed scan counts usually reflect an after-hours pass, not a broken scanner."
     if state.get("last_scan_completed_at"):
         return "Scanner is writing real scan state. Empty posts now usually mean filters, cooldowns, or no candidates."
     return "Waiting for the first completed flow scan."

@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import threading
+from datetime import datetime, timezone, timedelta
 from urllib.parse import parse_qs, urlparse
 
 from monster.config import load_config
@@ -28,6 +29,24 @@ STATE_LOCK = threading.Lock()
 _FLOW_SCAN_LOCK = threading.Lock()
 _FLOW_MONITOR_THREAD = None
 _FLOW_MONITOR_LOCK = threading.Lock()
+
+
+def _et_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
+
+
+def _is_flow_market_hours():
+    """True during regular market hours (9:30 AM to 4:00 PM ET, weekdays)."""
+    now = _et_now()
+    if now.weekday() >= 5:
+        return False
+    hour = now.hour
+    minute = now.minute
+    if hour < 9 or (hour == 9 and minute < 30):
+        return False
+    if hour >= 16:
+        return False
+    return True
 
 
 def _flow_state_snapshot():
@@ -167,7 +186,7 @@ def _flow_monitor_loop():
 
     while True:
         try:
-            if (config.get("flow") or {}).get("enabled", True):
+            if (config.get("flow") or {}).get("enabled", True) and _is_flow_market_hours():
                 _run_flow_scan_async()
         except Exception as exc:
             logging.getLogger(__name__).error(f"Embedded flow monitor error: {exc}")
