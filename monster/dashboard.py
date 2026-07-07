@@ -117,6 +117,8 @@ def render_dashboard(config, public_base_url=None):
           color: #f4f4f5;
         }}
         main {{
+          display: flex;
+          flex-direction: column;
           max-width: 1280px;
           margin: 0 auto;
           padding: 18px 18px 44px;
@@ -448,6 +450,8 @@ def render_dashboard(config, public_base_url=None):
           color: #f7e8eb;
         }}
         .diagnostics {{
+          order: 50;
+          margin-top: 4px;
           margin-bottom: 16px;
           border: 1px solid rgba(255, 255, 255, 0.09);
           border-radius: 8px;
