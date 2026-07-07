@@ -159,10 +159,12 @@ def render_dashboard(config, public_base_url=None):
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 16px;
-          padding: 14px 16px;
+          margin-bottom: 12px;
+          padding: 22px 22px;
+          min-height: 126px;
           background:
-            linear-gradient(90deg, rgba(255, 63, 93, 0.12), transparent 42%),
+            linear-gradient(110deg, rgba(255, 63, 93, 0.22), transparent 38%),
+            linear-gradient(250deg, rgba(123, 215, 255, 0.14), transparent 42%),
             rgba(15, 16, 20, 0.92);
           border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 8px;
@@ -179,26 +181,81 @@ def render_dashboard(config, public_base_url=None):
         .brand {{
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 16px;
         }}
         .brand-mark {{
-          width: 36px;
-          height: 36px;
+          width: 58px;
+          height: 58px;
           border-radius: 8px;
           background:
             linear-gradient(135deg, #ff465f 0%, #9c1026 100%);
-          box-shadow: 0 0 0 1px rgba(255,255,255,.15), 0 10px 28px rgba(255, 63, 93, 0.3);
+          box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 16px 44px rgba(255, 63, 93, 0.38);
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          font-size: 17px;
+          font-size: 28px;
           font-weight: 800;
           color: white;
         }}
+        .brand-kicker {{
+          color: var(--amber);
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: .16em;
+          text-transform: uppercase;
+        }}
+        .brand-title {{
+          margin-top: 4px;
+          color: #fff;
+          font-size: 34px;
+          font-weight: 900;
+          line-height: .96;
+          text-transform: uppercase;
+        }}
         .sub {{
-          margin-top: 8px;
+          margin-top: 6px;
           color: var(--muted);
           font-size: 14px;
+        }}
+        .topbar .ticker-strip {{
+          justify-content: flex-end;
+          max-width: 570px;
+        }}
+        .command-strip {{
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin-bottom: 16px;
+        }}
+        .command-strip div {{
+          min-height: 64px;
+          padding: 12px 14px;
+          border: 1px solid rgba(255,255,255,.1);
+          border-radius: 8px;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.018)),
+            rgba(12, 13, 17, .88);
+          box-shadow: 0 14px 34px rgba(0,0,0,.24);
+        }}
+        .command-strip span {{
+          display: block;
+          margin-bottom: 7px;
+          color: #a8a0a5;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }}
+        .command-strip strong {{
+          color: #fff;
+          font-size: 15px;
+          line-height: 1.2;
+        }}
+        .command-strip .hot strong {{
+          color: var(--green);
+        }}
+        .command-strip .warn strong {{
+          color: var(--amber);
         }}
         .ticker-strip, .health-row, .desk-status {{
           display: flex;
@@ -634,6 +691,9 @@ def render_dashboard(config, public_base_url=None):
           .hero, .layout {{
             grid-template-columns: 1fr;
           }}
+          .command-strip {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }}
           .summary {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
@@ -654,6 +714,18 @@ def render_dashboard(config, public_base_url=None):
           .topbar {{
             align-items: flex-start;
             flex-direction: column;
+            min-height: 0;
+          }}
+          .brand-title {{
+            font-size: 25px;
+          }}
+          .brand-mark {{
+            width: 48px;
+            height: 48px;
+            font-size: 22px;
+          }}
+          .command-strip {{
+            grid-template-columns: 1fr;
           }}
           .metrics, .strip, .position-grid, .hero-grid, .summary {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -701,8 +773,9 @@ def render_dashboard(config, public_base_url=None):
           <div class="brand">
             <div class="brand-mark">G</div>
             <div>
-              <div style="font-weight:700;">GainzAlgo Monster</div>
-              <div class="sub" style="margin:2px 0 0 0;">Clutch-time signal board</div>
+              <div class="brand-kicker">Live Paper Trading Desk</div>
+              <div class="brand-title">GainzAlgo Command Center</div>
+              <div class="sub" style="margin:2px 0 0 0;">LOTTO execution, swing watch, paper P&amp;L, and risk status in one cockpit.</div>
             </div>
           </div>
           <div class="ticker-strip">
@@ -713,6 +786,13 @@ def render_dashboard(config, public_base_url=None):
             <a class="ticker-pill" href="/contract-picker">Contract Picker</a>
             <div class="ticker-pill">{escape(focus_list)}</div>
           </div>
+        </section>
+
+        <section class="command-strip">
+          <div class="hot"><span>Engine</span><strong>Paper Trading Armed</strong></div>
+          <div><span>Route</span><strong>{escape(_route_label(webhook_base_url))}</strong></div>
+          <div><span>Latest Lane</span><strong>{escape(str((latest_alert or {}).get("trade_style") or "Waiting"))}</strong></div>
+          <div class="warn"><span>Focus List</span><strong>{escape(focus_list)}</strong></div>
         </section>
 
         <section class="cockpit">
