@@ -188,6 +188,47 @@ def render_dashboard(config, public_base_url=None):
           gap: 16px;
           margin-bottom: 16px;
         }}
+        .cockpit {{
+          display: grid;
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+          gap: 10px;
+          margin-bottom: 16px;
+        }}
+        .metric-card {{
+          background: rgba(20, 20, 25, 0.96);
+          border: 1px solid rgba(255, 255, 255, 0.09);
+          border-radius: 8px;
+          padding: 14px;
+          min-height: 88px;
+        }}
+        .metric-card.primary {{
+          border-color: rgba(103, 255, 149, 0.24);
+          background: linear-gradient(180deg, rgba(103,255,149,.08), rgba(20,20,25,.96));
+        }}
+        .metric-card.warning {{
+          border-color: rgba(255, 211, 126, 0.24);
+        }}
+        .metric-label {{
+          color: #b9aeb1;
+          font-size: 11px;
+          line-height: 1.25;
+          margin-bottom: 8px;
+          text-transform: uppercase;
+        }}
+        .metric-value {{
+          display: block;
+          color: #ffffff;
+          font-size: 24px;
+          font-weight: 800;
+          line-height: 1.05;
+          overflow-wrap: anywhere;
+        }}
+        .metric-note {{
+          color: #9d9397;
+          font-size: 11px;
+          line-height: 1.35;
+          margin-top: 7px;
+        }}
         .hero-card, .panel, .card, .summary div {{
           background: rgba(20, 20, 25, 0.96);
           border: 1px solid rgba(206, 17, 38, 0.16);
@@ -406,6 +447,24 @@ def render_dashboard(config, public_base_url=None):
           font-size: 14px;
           color: #f7e8eb;
         }}
+        .diagnostics {{
+          margin-bottom: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.09);
+          border-radius: 8px;
+          background: rgba(20, 20, 25, 0.82);
+        }}
+        .diagnostics summary {{
+          cursor: pointer;
+          padding: 14px 16px;
+          color: #fff2f4;
+          font-size: 13px;
+          font-weight: 700;
+          letter-spacing: .04em;
+          text-transform: uppercase;
+        }}
+        .diagnostics .diagnostic-body {{
+          padding: 0 16px 16px;
+        }}
         .controls {{
           display: flex;
           gap: 8px;
@@ -439,13 +498,16 @@ def render_dashboard(config, public_base_url=None):
           .summary {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
+          .cockpit {{
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }}
         }}
         @media (max-width: 760px) {{
           .topbar {{
             align-items: flex-start;
             flex-direction: column;
           }}
-          .metrics, .strip, .position-grid, .hero-grid, .summary {{
+          .metrics, .strip, .position-grid, .hero-grid, .summary, .cockpit {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
           .hero-symbol {{
@@ -492,6 +554,39 @@ def render_dashboard(config, public_base_url=None):
           </div>
         </section>
 
+        <section class="cockpit">
+          <div class="metric-card primary">
+            <div class="metric-label">Total Paper P&amp;L</div>
+            <strong class="metric-value {_pnl_class(total_closed_pnl)}">{escape(_fmt_money(total_closed_pnl))}</strong>
+            <div class="metric-note">All closed paper trades</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Today P&amp;L</div>
+            <strong class="metric-value {_pnl_class(today['pnl'])}">{escape(_fmt_money(today['pnl']))}</strong>
+            <div class="metric-note">{today['closed']} closed today</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Overall Win Rate</div>
+            <strong class="metric-value">{escape(_fmt_pct(paper_stats.get('win_rate')))}</strong>
+            <div class="metric-note">{paper_stats.get('wins', 0)}W / {paper_stats.get('losses', 0)}L</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">LOTTO Win Rate</div>
+            <strong class="metric-value">{escape(_fmt_pct((lane_analytics.get('LOTTO') or {}).get('win_rate')))}</strong>
+            <div class="metric-note">{(lane_analytics.get('LOTTO') or {}).get('closed', 0)} closed trades</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Open Paper Trades</div>
+            <strong class="metric-value">{len(paper_open_positions)}</strong>
+            <div class="metric-note">Live positions right now</div>
+          </div>
+          <div class="metric-card warning">
+            <div class="metric-label">Risk Status</div>
+            <strong class="metric-value {risk['status_class']}">{escape(risk['status'])}</strong>
+            <div class="metric-note">{escape(risk['note'])}</div>
+          </div>
+        </section>
+
         <section class="hero">
           <section class="hero-card">
             <div class="hero-title">Last Confirmed Signal</div>
@@ -513,8 +608,6 @@ def render_dashboard(config, public_base_url=None):
             <div class="health-row">{health}</div>
             <div class="section-title" style="margin-top:14px;">Signal Flow</div>
             <div class="recap-box">{escape(_signal_flow_text(last_sent_alert, latest_error))}</div>
-            <div class="section-title" style="margin-top:14px;">Webhook</div>
-            <div class="recap-box">{escape((webhook_base_url + "/webhook/tradingview") if webhook_base_url else "Webhook unavailable")}</div>
           </section>
         </section>
 
@@ -542,6 +635,9 @@ def render_dashboard(config, public_base_url=None):
           </section>
         </section>
 
+        <details class="diagnostics">
+          <summary>System Details</summary>
+          <div class="diagnostic-body">
         <section class="panel" style="margin-bottom:16px;">
           <div class="section-title">Ops Center</div>
           <div class="table leader-table">
@@ -694,7 +790,7 @@ def render_dashboard(config, public_base_url=None):
               <div class="grid-stat"><span>Discord Sent</span><strong>{execution_funnel['discord_sent']}</strong></div>
               <div class="grid-stat"><span>Paper Entered</span><strong>{execution_funnel['paper_entered']}</strong></div>
               <div class="grid-stat"><span>Match Rate</span><strong>{escape(_fmt_pct(execution_funnel['match_rate']))}</strong></div>
-              <div class="grid-stat"><span>Execution Rate</span><strong>{escape(_fmt_pct(execution_funnel['paper_entry_rate']))}</strong></div>
+              <div class="grid-stat"><span>Entries / Contract</span><strong>{escape(_fmt_pct(execution_funnel['paper_entry_rate']))}</strong></div>
             </div>
           </section>
           <section class="panel">
@@ -707,6 +803,8 @@ def render_dashboard(config, public_base_url=None):
             </div>
           </section>
         </section>
+          </div>
+        </details>
 
         <section class="grid">
           {style_cards}
