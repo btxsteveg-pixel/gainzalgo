@@ -103,6 +103,18 @@ def render_dashboard(config, public_base_url=None):
       <style>
         :root {{
           color-scheme: dark;
+          --bg: #08090b;
+          --panel: rgba(18, 19, 23, 0.9);
+          --panel-strong: rgba(23, 24, 29, 0.96);
+          --line: rgba(255, 255, 255, 0.1);
+          --line-red: rgba(226, 34, 62, 0.24);
+          --text: #f7f7f8;
+          --muted: #aaa2a7;
+          --red: #ff3f5d;
+          --red-soft: rgba(255, 63, 93, 0.16);
+          --green: #55f08a;
+          --amber: #ffbf47;
+          --cyan: #7bd7ff;
         }}
         * {{
           box-sizing: border-box;
@@ -111,53 +123,81 @@ def render_dashboard(config, public_base_url=None):
           margin: 0;
           font-family: Inter, Arial, sans-serif;
           background:
-            radial-gradient(circle at top left, rgba(206, 17, 38, 0.24), transparent 28%),
-            radial-gradient(circle at top right, rgba(255, 255, 255, 0.08), transparent 18%),
-            linear-gradient(180deg, #0b0b0d 0%, #151518 100%);
-          color: #f4f4f5;
+            linear-gradient(115deg, rgba(226, 34, 62, 0.16), transparent 34%),
+            linear-gradient(245deg, rgba(123, 215, 255, 0.08), transparent 30%),
+            linear-gradient(180deg, #07080a 0%, #101116 46%, #08090b 100%);
+          color: var(--text);
+        }}
+        body::before {{
+          content: "";
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          background-image:
+            linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.026) 1px, transparent 1px);
+          background-size: 56px 56px;
+          mask-image: linear-gradient(180deg, rgba(0,0,0,.72), transparent 78%);
         }}
         main {{
           display: flex;
           flex-direction: column;
+          position: relative;
+          z-index: 1;
           max-width: 1280px;
           margin: 0 auto;
-          padding: 18px 18px 44px;
+          padding: 18px 18px 52px;
         }}
         .topbar, .panel, .hero-card, .card, .summary div {{
-          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+          box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
         }}
         .topbar {{
+          position: sticky;
+          top: 10px;
+          z-index: 5;
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 14px;
-          padding: 10px 14px;
-          background: rgba(20, 20, 24, 0.9);
-          border: 1px solid rgba(206, 17, 38, 0.28);
+          margin-bottom: 16px;
+          padding: 14px 16px;
+          background:
+            linear-gradient(90deg, rgba(255, 63, 93, 0.12), transparent 42%),
+            rgba(15, 16, 20, 0.92);
+          border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 8px;
           backdrop-filter: blur(10px);
+        }}
+        .topbar::before {{
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          border-top: 1px solid rgba(255, 255, 255, 0.2);
+          pointer-events: none;
         }}
         .brand {{
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 12px;
         }}
         .brand-mark {{
-          width: 28px;
-          height: 28px;
+          width: 36px;
+          height: 36px;
           border-radius: 8px;
-          background: linear-gradient(135deg, #ce1126 0%, #8f0f1f 100%);
+          background:
+            linear-gradient(135deg, #ff465f 0%, #9c1026 100%);
+          box-shadow: 0 0 0 1px rgba(255,255,255,.15), 0 10px 28px rgba(255, 63, 93, 0.3);
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          font-size: 15px;
+          font-size: 17px;
           font-weight: 800;
           color: white;
         }}
         .sub {{
           margin-top: 8px;
-          color: #c8aab0;
+          color: var(--muted);
           font-size: 14px;
         }}
         .ticker-strip, .health-row, .desk-status {{
@@ -168,15 +208,19 @@ def render_dashboard(config, public_base_url=None):
         .ticker-pill, .chip, .status-pill {{
           padding: 6px 10px;
           border-radius: 8px;
-          background: rgba(28, 28, 33, 0.98);
-          border: 1px solid rgba(206, 17, 38, 0.16);
-          color: #f3c7ce;
+          background: rgba(255, 255, 255, 0.055);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: #f4e8eb;
           font-size: 12px;
           text-decoration: none;
         }}
-        .chip.good {{ color: #8cffb0; border-color: rgba(118,255,163,.22); }}
-        .chip.warn {{ color: #ffd37e; border-color: rgba(255,211,126,.22); }}
-        .chip.bad {{ color: #ff9aa7; border-color: rgba(255,154,167,.22); }}
+        a.ticker-pill:hover {{
+          border-color: rgba(255, 63, 93, 0.45);
+          background: rgba(255, 63, 93, 0.12);
+        }}
+        .chip.good {{ color: var(--green); border-color: rgba(85,240,138,.28); }}
+        .chip.warn {{ color: var(--amber); border-color: rgba(255,191,71,.28); }}
+        .chip.bad {{ color: #ff9aa7; border-color: rgba(255,154,167,.28); }}
         .status-pill {{
           color: #f6d9de;
         }}
@@ -186,32 +230,63 @@ def render_dashboard(config, public_base_url=None):
         }}
         .hero {{
           display: grid;
-          grid-template-columns: 1.5fr 1fr;
+          grid-template-columns: 1.35fr 1fr;
           gap: 16px;
           margin-bottom: 16px;
         }}
         .cockpit {{
           display: grid;
-          grid-template-columns: repeat(6, minmax(0, 1fr));
-          gap: 10px;
+          grid-template-columns: repeat(12, minmax(0, 1fr));
+          gap: 12px;
           margin-bottom: 16px;
         }}
         .metric-card {{
-          background: rgba(20, 20, 25, 0.96);
-          border: 1px solid rgba(255, 255, 255, 0.09);
+          grid-column: span 2;
+          position: relative;
+          overflow: hidden;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.02)),
+            var(--panel-strong);
+          border: 1px solid var(--line);
           border-radius: 8px;
-          padding: 14px;
-          min-height: 88px;
+          padding: 15px 16px;
+          min-height: 104px;
+        }}
+        .metric-card::before {{
+          content: "";
+          position: absolute;
+          inset: 0 0 auto;
+          height: 3px;
+          background: rgba(255, 255, 255, 0.16);
         }}
         .metric-card.primary {{
-          border-color: rgba(103, 255, 149, 0.24);
-          background: linear-gradient(180deg, rgba(103,255,149,.08), rgba(20,20,25,.96));
+          grid-column: span 2;
+          border-color: rgba(85, 240, 138, 0.35);
+          background:
+            linear-gradient(135deg, rgba(85,240,138,.16), transparent 52%),
+            linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.02)),
+            var(--panel-strong);
+        }}
+        .metric-card.primary::before {{
+          background: linear-gradient(90deg, var(--green), rgba(85,240,138,.2));
         }}
         .metric-card.warning {{
-          border-color: rgba(255, 211, 126, 0.24);
+          border-color: rgba(255, 191, 71, 0.34);
+        }}
+        .metric-card.warning::before {{
+          background: linear-gradient(90deg, var(--amber), rgba(255,191,71,.15));
+        }}
+        .metric-card.win::before {{
+          background: linear-gradient(90deg, var(--cyan), rgba(123,215,255,.12));
+        }}
+        .metric-card.compact {{
+          grid-column: span 2;
+        }}
+        .metric-card.compact .metric-value {{
+          font-size: 26px;
         }}
         .metric-label {{
-          color: #b9aeb1;
+          color: #bdb6ba;
           font-size: 11px;
           line-height: 1.25;
           margin-bottom: 8px;
@@ -220,39 +295,51 @@ def render_dashboard(config, public_base_url=None):
         .metric-value {{
           display: block;
           color: #ffffff;
-          font-size: 24px;
+          font-size: 26px;
           font-weight: 800;
           line-height: 1.05;
           overflow-wrap: anywhere;
         }}
         .metric-note {{
-          color: #9d9397;
+          color: #9f969b;
           font-size: 11px;
           line-height: 1.35;
           margin-top: 7px;
         }}
         .hero-card, .panel, .card, .summary div {{
-          background: rgba(20, 20, 25, 0.96);
-          border: 1px solid rgba(206, 17, 38, 0.16);
+          background:
+            linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.018)),
+            var(--panel);
+          border: 1px solid var(--line);
           border-radius: 8px;
           padding: 16px;
           backdrop-filter: blur(12px);
         }}
         .hero-card {{
-          min-height: 220px;
+          position: relative;
+          overflow: hidden;
+          min-height: 250px;
           background:
-            linear-gradient(135deg, rgba(206,17,38,.14), rgba(20,20,25,.98) 38%),
-            rgba(20,20,25,.96);
+            linear-gradient(135deg, rgba(255,63,93,.22), rgba(18,19,23,.98) 42%),
+            var(--panel-strong);
+          border-color: rgba(255, 63, 93, 0.3);
+        }}
+        .hero-card::after {{
+          content: "";
+          position: absolute;
+          inset: auto 16px 14px 16px;
+          height: 1px;
+          background: linear-gradient(90deg, rgba(255,63,93,.65), transparent);
         }}
         .hero-title {{
           font-size: 13px;
           text-transform: uppercase;
           letter-spacing: .05em;
-          color: #d6b0b7;
+          color: #f0c4cb;
           margin-bottom: 8px;
         }}
         .hero-symbol {{
-          font-size: 40px;
+          font-size: 48px;
           font-weight: 800;
           line-height: 1;
           margin-bottom: 10px;
@@ -275,7 +362,7 @@ def render_dashboard(config, public_base_url=None):
         }}
         .summary span, .stat span, .grid-stat span, .table-head span {{
           display: block;
-          color: #cba8af;
+          color: #b8a5aa;
           font-size: 12px;
           margin-bottom: 6px;
           text-transform: uppercase;
@@ -284,8 +371,8 @@ def render_dashboard(config, public_base_url=None):
           font-size: 22px;
         }}
         .stat, .grid-stat {{
-          background: rgba(12, 12, 16, 0.96);
-          border: 1px solid rgba(206, 17, 38, 0.12);
+          background: rgba(8, 9, 12, 0.72);
+          border: 1px solid rgba(255, 255, 255, 0.075);
           border-radius: 8px;
           padding: 12px;
         }}
@@ -304,8 +391,22 @@ def render_dashboard(config, public_base_url=None):
           gap: 16px;
           margin-bottom: 16px;
         }}
-        .card.lotto {{ border-top: 3px solid #ce1126; }}
-        .card.swing {{ border-top: 3px solid #ffffff; }}
+        .card {{
+          position: relative;
+          overflow: hidden;
+        }}
+        .card.lotto {{
+          border-top: 3px solid var(--red);
+          background:
+            linear-gradient(135deg, rgba(255,63,93,.1), transparent 42%),
+            var(--panel);
+        }}
+        .card.swing {{
+          border-top: 3px solid var(--cyan);
+          background:
+            linear-gradient(135deg, rgba(123,215,255,.09), transparent 42%),
+            var(--panel);
+        }}
         .card-head {{
           display: flex;
           justify-content: space-between;
@@ -334,11 +435,12 @@ def render_dashboard(config, public_base_url=None):
           border-radius: 8px;
           font-size: 12px;
           font-weight: 700;
-          background: rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.09);
           color: #f4f4f5;
+          border: 1px solid rgba(255,255,255,.08);
         }}
-        .tag.buy {{ background: rgba(206, 17, 38, 0.16); color: #ff8d9a; }}
-        .tag.sell {{ background: rgba(255, 255, 255, 0.14); color: #f5f5f5; }}
+        .tag.buy {{ background: rgba(255, 63, 93, 0.18); color: #ff9caa; border-color: rgba(255,63,93,.22); }}
+        .tag.sell {{ background: rgba(123, 215, 255, 0.13); color: #d9f4ff; border-color: rgba(123,215,255,.2); }}
         .metrics, .strip, .position-grid {{
           display: grid;
           gap: 8px;
@@ -348,14 +450,14 @@ def render_dashboard(config, public_base_url=None):
         .strip {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
         .position-grid {{ grid-template-columns: repeat(5, minmax(0, 1fr)); }}
         .metrics div, .strip div, .position-grid div, .hero-grid div {{
-          background: rgba(12, 12, 16, 0.96);
-          border: 1px solid rgba(206, 17, 38, 0.12);
+          background: rgba(8, 9, 12, 0.72);
+          border: 1px solid rgba(255, 255, 255, 0.075);
           border-radius: 8px;
           padding: 10px;
         }}
         .metrics span, .strip span, .position-grid span, .hero-grid span {{
           display: block;
-          color: #b79097;
+          color: #a99ba1;
           font-size: 11px;
           margin-bottom: 6px;
           text-transform: uppercase;
@@ -367,6 +469,9 @@ def render_dashboard(config, public_base_url=None):
         strong.down {{ color: #ff8b9a; }}
         strong.warn {{ color: #ffd37e; }}
         .section-title {{
+          display: flex;
+          align-items: center;
+          gap: 8px;
           font-size: 13px;
           font-weight: 700;
           margin-bottom: 8px;
@@ -374,11 +479,19 @@ def render_dashboard(config, public_base_url=None):
           text-transform: uppercase;
           letter-spacing: .04em;
         }}
+        .section-title::before {{
+          content: "";
+          display: inline-block;
+          width: 4px;
+          height: 14px;
+          border-radius: 8px;
+          background: linear-gradient(180deg, var(--red), var(--amber));
+        }}
         .table {{
-          border: 1px solid rgba(206, 17, 38, 0.14);
+          border: 1px solid rgba(255,255,255,0.08);
           border-radius: 8px;
           overflow: hidden;
-          background: rgba(10, 10, 13, 0.92);
+          background: rgba(6, 7, 10, 0.78);
         }}
         .table-head, .row {{
           display: grid;
@@ -387,13 +500,18 @@ def render_dashboard(config, public_base_url=None):
           padding: 10px 12px;
         }}
         .table-head {{
-          color: #ba969d;
+          color: #b9aeb2;
           font-size: 11px;
           text-transform: uppercase;
-          border-bottom: 1px solid rgba(206, 17, 38, 0.14);
+          border-bottom: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.035);
         }}
         .row {{
-          border-bottom: 1px solid rgba(206, 17, 38, 0.08);
+          border-bottom: 1px solid rgba(255,255,255,0.055);
+          transition: background .16s ease, transform .16s ease;
+        }}
+        .row:hover {{
+          background: rgba(255, 255, 255, 0.035);
         }}
         .row:last-child {{
           border-bottom: none;
@@ -426,7 +544,7 @@ def render_dashboard(config, public_base_url=None):
           grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(96px, .8fr) minmax(96px, .8fr) minmax(0, 1fr);
         }}
         .alert-meta, .muted {{
-          color: #c1a6ab;
+          color: #aaa0a5;
           font-size: 12px;
         }}
         .audit-flow {{
@@ -447,7 +565,7 @@ def render_dashboard(config, public_base_url=None):
           white-space: pre-wrap;
           line-height: 1.5;
           font-size: 14px;
-          color: #f7e8eb;
+          color: #eee7ea;
         }}
         .diagnostics {{
           order: 50;
@@ -468,6 +586,23 @@ def render_dashboard(config, public_base_url=None):
         }}
         .diagnostics .diagnostic-body {{
           padding: 0 16px 16px;
+        }}
+        .paper-stat-cards {{
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 10px;
+          margin-bottom: 16px;
+        }}
+        .paper-lane-grid {{
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          gap: 16px;
+        }}
+        .paper-lane-metrics {{
+          display: grid;
+          grid-template-columns: repeat(6, 1fr);
+          gap: 8px;
+          margin-bottom: 14px;
         }}
         .controls {{
           display: flex;
@@ -492,7 +627,7 @@ def render_dashboard(config, public_base_url=None):
           background: rgba(206, 17, 38, 0.16);
         }}
         .empty {{
-          color: #b89097;
+          color: #a99da2;
           padding: 14px 12px;
         }}
         @media (max-width: 940px) {{
@@ -503,6 +638,15 @@ def render_dashboard(config, public_base_url=None):
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
           .cockpit {{
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+          }}
+          .metric-card, .metric-card.primary, .metric-card.warning, .metric-card.compact {{
+            grid-column: span 2;
+          }}
+          .paper-stat-cards {{
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }}
+          .paper-lane-metrics {{
             grid-template-columns: repeat(3, minmax(0, 1fr));
           }}
         }}
@@ -511,11 +655,24 @@ def render_dashboard(config, public_base_url=None):
             align-items: flex-start;
             flex-direction: column;
           }}
-          .metrics, .strip, .position-grid, .hero-grid, .summary, .cockpit {{
+          .metrics, .strip, .position-grid, .hero-grid, .summary {{
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }}
+          .cockpit {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }}
+          .metric-card, .metric-card.primary, .metric-card.warning, .metric-card.compact {{
+            grid-column: span 1;
+          }}
+          .paper-stat-cards,
+          .paper-lane-metrics {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }}
+          .paper-lane-grid {{
+            grid-template-columns: 1fr;
+          }}
           .hero-symbol {{
-            font-size: 30px;
+            font-size: 34px;
           }}
           .alert-table .table-head, .alert-table .row,
           .closed-table .table-head, .closed-table .row,
@@ -569,17 +726,17 @@ def render_dashboard(config, public_base_url=None):
             <strong class="metric-value {_pnl_class(today['pnl'])}">{escape(_fmt_money(today['pnl']))}</strong>
             <div class="metric-note">{today['closed']} closed today</div>
           </div>
-          <div class="metric-card">
+          <div class="metric-card win">
             <div class="metric-label">Overall Win Rate</div>
             <strong class="metric-value">{escape(_fmt_pct(paper_stats.get('win_rate')))}</strong>
             <div class="metric-note">{paper_stats.get('wins', 0)}W / {paper_stats.get('losses', 0)}L</div>
           </div>
-          <div class="metric-card">
+          <div class="metric-card win">
             <div class="metric-label">LOTTO Win Rate</div>
             <strong class="metric-value">{escape(_fmt_pct((lane_analytics.get('LOTTO') or {}).get('win_rate')))}</strong>
             <div class="metric-note">{(lane_analytics.get('LOTTO') or {}).get('closed', 0)} closed trades</div>
           </div>
-          <div class="metric-card">
+          <div class="metric-card compact">
             <div class="metric-label">Open Paper Trades</div>
             <strong class="metric-value">{len(paper_open_positions)}</strong>
             <div class="metric-note">Live positions right now</div>
@@ -2742,7 +2899,7 @@ def _paper_section(paper):
             <div style="font-size:11px;color:#777;line-height:1.45;margin-bottom:12px">
               Dollar P&amp;L reflects actual sized contracts. Gray sublines show percent return and the 1-contract equivalent so you can compare signal quality across names.
             </div>
-            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px">
+            <div class="paper-lane-metrics">
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Completed Trades</div><div style="font-size:18px;font-weight:600">{trades_count}</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Win Rate</div><div style="font-size:18px;font-weight:600">{wr}%</div></div>
               <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:#888;text-transform:uppercase">Open</div><div style="font-size:18px;font-weight:600">{len(open_items)}</div></div>
@@ -2758,7 +2915,7 @@ def _paper_section(paper):
 
     # ── Stat cards ───────────────────────────────────────────────────────
     stat_cards = f"""
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px">
+        <div class="paper-stat-cards">
           <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:12px 14px">
             <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Total P&L</div>
             <div style="font-size:20px;font-weight:600;color:{pnl_color(total_pnl)}">{fmt_pnl(total_pnl)}</div>
@@ -2784,7 +2941,7 @@ def _paper_section(paper):
         </div>"""
 
     style_sections = f"""
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+        <div class="paper-lane-grid">
           {style_panel('LOTTO', '#ffb727', lotto_pnl, lotto_trades, lotto_open, lotto_closed)}
           {style_panel('SWING', '#8ad7ff', swing_pnl, swing_trades, swing_open, swing_closed)}
         </div>"""
