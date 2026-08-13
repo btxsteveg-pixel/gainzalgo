@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from monster.dashboard import _execution_funnel, _lane_analytics
+from monster.dashboard import _execution_funnel, _lane_analytics, _paper_section
 from monster.discord_sender import _extract_strike_from_symbol, _fmt_contract_expiry, _title_icon, _should_skip_discord_alert, _fire_suffix
 from monster.options_flow import _classify_time_and_sale_side, _select_sold_alerts_for_posting
 from monster.paper_trader import _should_force_close_position
@@ -67,6 +67,50 @@ class DashboardAnalyticsTests(unittest.TestCase):
         self.assertEqual(lanes["LOTTO"]["paper_entries"], 2)
         self.assertEqual(lanes["LOTTO"]["pnl"], 100.0)
         self.assertEqual(lanes["SWING"]["pnl"], -50.0)
+
+    def test_paper_section_accepts_stringified_numbers(self):
+        html = _paper_section(
+            {
+                "stats": {
+                    "total_pnl": "125.50",
+                    "lotto_pnl": "125.50",
+                    "swing_pnl": "-10",
+                    "wins": "2",
+                    "losses": "1",
+                    "win_rate": "66.7",
+                    "lotto_trades": "2",
+                    "swing_trades": "1",
+                },
+                "open_positions": [
+                    {
+                        "style": "LOTTO",
+                        "symbol": "AAPL",
+                        "side": "CALL",
+                        "option_symbol": "AAPL260501C00200000",
+                        "entry_contract_price": "3.25",
+                        "current_contract_price": "3.75",
+                        "unrealized_pnl": "50",
+                        "live_pnl_pct": "15.38",
+                        "contracts": "1",
+                    }
+                ],
+                "recent_closed": [
+                    {
+                        "style": "SWING",
+                        "symbol": "MSFT",
+                        "side": "PUT",
+                        "entry_contract_price": "4.00",
+                        "exit_contract_price": "3.50",
+                        "realized_pnl": "-50",
+                        "contracts_closed": "1",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("AAPL", html)
+        self.assertIn("+$125.50", html)
+        self.assertIn("$3.25", html)
 
 
 class PaperTraderPolicyTests(unittest.TestCase):

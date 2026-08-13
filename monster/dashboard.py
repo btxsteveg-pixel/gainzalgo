@@ -2795,22 +2795,24 @@ def _paper_section(paper):
     lotto_closed = [item for item in closed if str(item.get("style") or "").upper() == "LOTTO"]
     swing_closed = [item for item in closed if str(item.get("style") or "").upper() == "SWING"]
 
-    total_pnl   = stats.get("total_pnl", 0.0)
-    lotto_pnl   = stats.get("lotto_pnl", 0.0)
-    swing_pnl   = stats.get("swing_pnl", 0.0)
-    total_trades= stats.get("total_trades", 0)
-    wins        = stats.get("wins", 0)
-    losses      = stats.get("losses", 0)
-    win_rate    = stats.get("win_rate", 0)
-    lotto_trades= stats.get("lotto_trades", 0)
-    swing_trades= stats.get("swing_trades", 0)
+    total_pnl   = _safe_float(stats.get("total_pnl")) or 0.0
+    lotto_pnl   = _safe_float(stats.get("lotto_pnl")) or 0.0
+    swing_pnl   = _safe_float(stats.get("swing_pnl")) or 0.0
+    total_trades= _safe_int(stats.get("total_trades")) or 0
+    wins        = _safe_int(stats.get("wins")) or 0
+    losses      = _safe_int(stats.get("losses")) or 0
+    win_rate    = _safe_float(stats.get("win_rate")) or 0
+    lotto_trades= _safe_int(stats.get("lotto_trades")) or 0
+    swing_trades= _safe_int(stats.get("swing_trades")) or 0
 
     def pnl_color(v):
-        return "#00e676" if v >= 0 else "#ff1744"
+        value = _safe_float(v) or 0.0
+        return "#00e676" if value >= 0 else "#ff1744"
 
     def fmt_pnl(v):
-        sign = "+" if v >= 0 else ""
-        return f"{sign}${v:.2f}"
+        value = _safe_float(v) or 0.0
+        sign = "+" if value >= 0 else ""
+        return f"{sign}${value:.2f}"
 
     def contracts_for(item, *, closed=False):
         keys = (
@@ -2848,10 +2850,15 @@ def _paper_section(paper):
         return round(sum(values), 2) if values else 0.0
 
     def average_live_pct(items):
-        values = [item.get("live_pnl_pct") for item in items if item.get("live_pnl_pct") not in (None, "")]
+        values = [
+            _safe_float(item.get("live_pnl_pct"))
+            for item in items
+            if item.get("live_pnl_pct") not in (None, "")
+        ]
+        values = [value for value in values if value is not None]
         if not values:
             return None
-        return round(sum(float(value) for value in values) / len(values), 2)
+        return round(sum(values) / len(values), 2)
 
     def open_rows_for(items):
         if not items:
@@ -2860,8 +2867,8 @@ def _paper_section(paper):
         for p in items:
             sym         = escape(str(p.get("symbol", "")))
             side        = escape(str(p.get("side", "")))
-            entry       = p.get("entry_contract_price") or 0
-            unreal      = p.get("unrealized_pnl", 0.0) or 0.0
+            entry       = _safe_float(p.get("entry_contract_price")) or 0.0
+            unreal      = _safe_float(p.get("unrealized_pnl")) or 0.0
             opt_sym     = escape(str(p.get("option_symbol", "—")))
             entered     = str(p.get("entered_at", ""))[:16].replace("T", " ")
             unreal_pct  = p.get("live_pnl_pct")
@@ -2907,9 +2914,9 @@ def _paper_section(paper):
         for p in items:
             sym     = escape(str(p.get("symbol", "")))
             side    = escape(str(p.get("side", "")))
-            entry   = p.get("entry_contract_price") or 0
-            exit_px = p.get("exit_contract_price")
-            rpnl    = p.get("realized_pnl", 0.0) or 0.0
+            entry   = _safe_float(p.get("entry_contract_price")) or 0.0
+            exit_px = _safe_float(p.get("exit_contract_price"))
+            rpnl    = _safe_float(p.get("realized_pnl")) or 0.0
             contracts = contracts_for(p, closed=True)
             remaining_after = p.get("remaining_contracts_after")
             exit_type = "Final Close"
@@ -2963,8 +2970,8 @@ def _paper_section(paper):
             </div>"""
 
     def style_panel(label, tone, pnl, trades_count, open_items, closed_items):
-        win_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) > 0)
-        loss_count = sum(1 for item in closed_items if (item.get("realized_pnl") or 0) <= 0)
+        win_count = sum(1 for item in closed_items if (_safe_float(item.get("realized_pnl")) or 0.0) > 0)
+        loss_count = sum(1 for item in closed_items if (_safe_float(item.get("realized_pnl")) or 0.0) <= 0)
         wr = round((win_count / len(closed_items)) * 100) if closed_items else 0
         one_ct_live = one_contract_live_total(open_items)
         avg_live = average_live_pct(open_items)
