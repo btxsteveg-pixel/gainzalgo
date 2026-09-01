@@ -61,10 +61,9 @@ SOLD_MAX_POSTS_PER_SYMBOL = int(os.getenv("FLOW_SOLD_MAX_ALERTS_PER_SYMBOL", str
 SOLD_DAILY_MAX_ALERTS = int(os.getenv("FLOW_SOLD_DAILY_MAX_ALERTS", "12"))
 SOLD_REPEAT_WINDOW_MINUTES = int(os.getenv("FLOW_SOLD_REPEAT_WINDOW_MINUTES", str(REPEAT_WINDOW_MINUTES)))
 SOLD_SYMBOL_REPEAT_WINDOW_MINUTES = int(os.getenv("FLOW_SOLD_SYMBOL_REPEAT_WINDOW_MINUTES", str(SYMBOL_REPEAT_WINDOW_MINUTES)))
-TT_USERNAME = os.getenv("TASTYTRADE_USERNAME", "")
-TT_PASSWORD = os.getenv("TASTYTRADE_PASSWORD", "")
-TT_REMEMBER_TOKEN = os.getenv("TASTYTRADE_REMEMBER_TOKEN", "")
-TT_OTP = os.getenv("TASTYTRADE_OTP", "")
+TT_CLIENT_ID = os.getenv("TASTYTRADE_CLIENT_ID", "").strip()
+TT_CLIENT_SECRET = os.getenv("TASTYTRADE_CLIENT_SECRET", "").strip()
+TT_REFRESH_TOKEN = os.getenv("TASTYTRADE_REFRESH_TOKEN", "").strip()
 FLOW_ENABLED = os.getenv("FLOW_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 TASTYTRADE_API_ENABLED = os.getenv("TASTYTRADE_API_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -74,8 +73,12 @@ _DISCORD_POST_DELAY_SECONDS = 0.35
 _BASE_DIR = Path(__file__).resolve().parents[1]
 _ENV_PATH = _BASE_DIR / ".env"
 _FLOW_STATE_PATH = Path(os.getenv("DATA_DIR", str(_BASE_DIR / "data"))) / "flow_state.json"
-_TT_API_URL = "https://api.tastyworks.com"
+_TT_API_URL = os.getenv("TASTYTRADE_API_BASE_URL", "https://api.tastyworks.com").strip()
 _TT_USER_AGENT = "gainzalgo/1.0"
+_OAUTH_TOKEN_CACHE = {
+    "access_token": "",
+    "expires_at": 0.0,
+}
 
 
 def run_flow_scan():
@@ -111,11 +114,11 @@ async def _async_scan():
         logger.error("Unable to import tastytrade package: %s", exc)
         return []
 
-    if not TT_USERNAME or (not TT_PASSWORD and not TT_REMEMBER_TOKEN):
-        flow_state["last_scan_error"] = "missing Tastytrade credentials"
+    if not TASTYTRADE_API_ENABLED or not TT_CLIENT_SECRET or not TT_REFRESH_TOKEN:
+        flow_state["last_scan_error"] = "missing Tastytrade OAuth credentials"
         flow_state["last_scan_completed_at"] = _utc_iso()
         _save_flow_state(flow_state)
-        logger.error("TASTYTRADE_USERNAME plus TASTYTRADE_PASSWORD or TASTYTRADE_REMEMBER_TOKEN is required")
+        logger.error("TASTYTRADE_API_ENABLED, TASTYTRADE_CLIENT_SECRET, and TASTYTRADE_REFRESH_TOKEN are required")
         return []
 
     if not any([BULL_WEBHOOK, BEAR_WEBHOOK, SOLD_CALLS_WEBHOOK, SOLD_PUTS_WEBHOOK]):
@@ -135,18 +138,16 @@ async def _async_scan():
 
     try:
         session = await _create_tastytrade_session(
-            password=TT_PASSWORD or None,
-            remember_token=TT_REMEMBER_TOKEN or None,
-            remember_me=True,
-            two_factor_authentication=TT_OTP or None,
+            client_secret=TT_CLIENT_SECRET,
+            refresh_token=TT_REFRESH_TOKEN,
+            client_id=TT_CLIENT_ID or None,
         )
     except Exception as exc:
         flow_state["last_scan_error"] = str(exc)
         flow_state["last_scan_completed_at"] = _utc_iso()
         _save_flow_state(flow_state)
         logger.error(
-            "Tastytrade login failed: %s. If the account is prompting for a new device challenge, "
-            "log in once from a trusted client and set TASTYTRADE_REMEMBER_TOKEN for headless scans.",
+            "Tastytrade OAuth setup failed: %s. Verify TASTYTRADE_CLIENT_SECRET and TASTYTRADE_REFRESH_TOKEN.",
             exc,
         )
         return []
@@ -238,116 +239,109 @@ async def _async_scan():
 
 
 async def _create_tastytrade_session(
-    password=None,
-    remember_token=None,
-    remember_me=False,
-    two_factor_authentication=None,
+    client_secret=None,
+    refresh_token=None,
+    client_id=None,
 ):
     if not TASTYTRADE_API_ENABLED:
         raise RuntimeError("Tastytrade API access disabled; set TASTYTRADE_API_ENABLED=true only after compliance fixes are approved")
 
-    body = {
-        "login": TT_USERNAME,
-        "remember-me": bool(remember_me),
-    }
-    if password is None and remember_token is None:
-        raise ValueError("password or remember_token is required")
+    access_token = await _get_oauth_access_token(
+        client_secret=client_secret,
+        refresh_token=refresh_token,
+        client_id=client_id,
+    )
+    authed_headers = _base_headers()
+    authed_headers["Authorization"] = f"Bearer {access_token}"
 
-    headers = {
+    sync_client = httpx.Client(base_url=_TT_API_URL, headers=authed_headers)
+    async_client = httpx.AsyncClient(base_url=_TT_API_URL, headers=authed_headers)
+    try:
+        quote_response = await async_client.get("/quote-streamer-tokens", timeout=30)
+        quote_data = _parse_tastytrade_response(quote_response, "quote streamer token fetch")
+
+        return _DirectTastytradeSession(
+            sync_client=sync_client,
+            async_client=async_client,
+            access_token=access_token,
+            streamer_token=quote_data["token"],
+            dxlink_url=quote_data["dxlink-url"],
+        )
+    except Exception:
+        await async_client.aclose()
+        sync_client.close()
+        raise
+
+
+def _base_headers():
+    return {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "User-Agent": _TT_USER_AGENT,
     }
-    if two_factor_authentication:
-        headers["X-Tastyworks-OTP"] = two_factor_authentication
 
-    auth_client = httpx.AsyncClient(base_url=_TT_API_URL, headers=headers)
+
+async def _get_oauth_access_token(client_secret=None, refresh_token=None, client_id=None):
+    cached_token = _OAUTH_TOKEN_CACHE.get("access_token", "")
+    if cached_token and time.time() < float(_OAUTH_TOKEN_CACHE.get("expires_at", 0.0)):
+        return cached_token
+
+    client_secret = (client_secret or "").strip()
+    refresh_token = (refresh_token or "").strip()
+    client_id = (client_id or "").strip()
+    if not client_secret or not refresh_token:
+        raise ValueError("TASTYTRADE_CLIENT_SECRET and TASTYTRADE_REFRESH_TOKEN are required")
+
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_secret": client_secret,
+    }
+    if client_id:
+        body["client_id"] = client_id
+
+    async with httpx.AsyncClient(base_url=_TT_API_URL, headers=_base_headers()) as auth_client:
+        response = await auth_client.post("/oauth/token", json=body, timeout=30)
+        data = _parse_oauth_response(response, "OAuth token refresh")
+
+    access_token = (data.get("access_token") or data.get("access-token") or "").strip()
+    if not access_token:
+        raise RuntimeError("OAuth token refresh failed: missing access token")
+
+    expires_in = _safe_float(data.get("expires_in"), _safe_float(data.get("expires-in"), 900.0))
+    refresh_margin = min(120.0, max(30.0, expires_in * 0.2))
+    _OAUTH_TOKEN_CACHE["access_token"] = access_token
+    _OAUTH_TOKEN_CACHE["expires_at"] = time.time() + max(60.0, expires_in - refresh_margin)
+    return access_token
+
+
+def _parse_oauth_response(response, action):
     try:
-        attempts = []
-        if remember_token:
-            attempts.append({"remember-token": remember_token, "remember-me": bool(remember_me), "login": TT_USERNAME})
-        if password:
-            attempts.append({"password": password, "remember-me": bool(remember_me), "login": TT_USERNAME})
+        payload = response.json()
+    except Exception:
+        payload = {}
 
-        data = None
-        for index, attempt in enumerate(attempts):
-            response = await auth_client.post("/sessions", json=attempt, timeout=30)
-            try:
-                data = _parse_tastytrade_response(response, "login")
-                break
-            except RuntimeError as exc:
-                is_remember_attempt = "remember-token" in attempt
-                has_password_fallback = bool(password) and index < len(attempts) - 1
-                if is_remember_attempt and has_password_fallback and "invalid_credentials" in str(exc):
-                    logger.warning("Stored Tastytrade remember token was rejected; retrying password login")
-                    continue
-                raise
+    if response.status_code // 100 != 2:
+        error_obj = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        code = error_obj.get("code") or payload.get("error") or response.status_code
+        message = error_obj.get("message") or payload.get("error_description") or response.text
+        raise RuntimeError(f"{action} failed ({code}): {message}")
 
-        if data is None:
-            raise RuntimeError("login failed: no successful Tastytrade auth attempt")
-        session_token = data["session-token"]
-        fresh_remember_token = data.get("remember-token", "")
-
-        authed_headers = dict(headers)
-        authed_headers["Authorization"] = session_token
-
-        sync_client = httpx.Client(base_url=_TT_API_URL, headers=authed_headers)
-        async_client = httpx.AsyncClient(base_url=_TT_API_URL, headers=authed_headers)
-        quote_response = await async_client.get("/quote-streamer-tokens", timeout=30)
-        quote_data = _parse_tastytrade_response(quote_response, "quote streamer token fetch")
-
-        _persist_remember_token(fresh_remember_token)
-        return _DirectTastytradeSession(
-            sync_client=sync_client,
-            async_client=async_client,
-            session_token=session_token,
-            remember_token=fresh_remember_token,
-            streamer_token=quote_data["token"],
-            dxlink_url=quote_data["dxlink-url"],
-        )
-    finally:
-        await auth_client.aclose()
-
-
-def _persist_remember_token(token):
-    global TT_REMEMBER_TOKEN
-
-    token = (token or "").strip()
-    if not token or token == TT_REMEMBER_TOKEN:
-        return
-
-    try:
-        original = _ENV_PATH.read_text()
-        lines = original.splitlines()
-        updated = []
-        found = False
-        for line in lines:
-            if line.startswith("TASTYTRADE_REMEMBER_TOKEN="):
-                updated.append(f"TASTYTRADE_REMEMBER_TOKEN={token}")
-                found = True
-            else:
-                updated.append(line)
-        if not found:
-            updated.append(f"TASTYTRADE_REMEMBER_TOKEN={token}")
-        new_text = "\n".join(updated)
-        if original.endswith("\n"):
-            new_text += "\n"
-        _ENV_PATH.write_text(new_text)
-        os.environ["TASTYTRADE_REMEMBER_TOKEN"] = token
-        TT_REMEMBER_TOKEN = token
-        logger.info("Updated Tastytrade remember token in %s", _ENV_PATH)
-    except Exception as exc:
-        logger.warning("Unable to persist Tastytrade remember token: %s", exc)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, dict):
+        return data
+    return payload if isinstance(payload, dict) else {}
 
 
 class _DirectTastytradeSession:
-    def __init__(self, sync_client, async_client, session_token, remember_token, streamer_token, dxlink_url):
+    def __init__(self, sync_client, async_client, access_token, streamer_token, dxlink_url):
         self.is_test = False
         self.proxy = None
         self.sync_client = sync_client
         self.async_client = async_client
-        self.session_token = session_token
-        self.remember_token = remember_token
+        self.access_token = access_token
+        self.session_token = access_token
+        self.remember_token = ""
         self.streamer_token = streamer_token
         self.dxlink_url = dxlink_url
 
@@ -360,10 +354,6 @@ class _DirectTastytradeSession:
         return _parse_tastytrade_response(response, f"GET {url}")
 
     async def aclose(self):
-        try:
-            await self.async_client.delete("/sessions", timeout=10)
-        except Exception:
-            pass
         await self.async_client.aclose()
         self.sync_client.close()
 
