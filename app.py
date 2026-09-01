@@ -67,26 +67,8 @@ def _health_payload(request_base_url=None):
     flow = config.get("flow") or {}
     heatmap = config.get("heatmap") or {}
     news = config.get("news") or {}
-    flow_state = _flow_state_snapshot()
     public_base = request_base_url or config.get("public_base_url") or ""
     webhook_url = f"{public_base.rstrip('/')}/webhook/tradingview" if public_base else None
-    flow_auth_ready = bool(
-        flow.get("enabled", True)
-        and flow.get("tastytrade_username")
-        and (flow.get("tastytrade_password") or flow.get("tastytrade_remember_token"))
-    )
-    directional_routes_ready = bool(flow.get("bull_webhook") and flow.get("bear_webhook"))
-    sold_routes_ready = bool(flow.get("sold_calls_webhook") and flow.get("sold_puts_webhook"))
-    flow_missing = []
-    if not flow_auth_ready:
-        flow_missing.append("tastytrade_auth")
-    if not directional_routes_ready:
-        flow_missing.append("directional_webhooks")
-    sold_missing = []
-    if not flow_auth_ready:
-        sold_missing.append("tastytrade_auth")
-    if not sold_routes_ready:
-        sold_missing.append("sold_webhooks")
     return {
         "ok": True,
         "styles": list(styles.keys()),
@@ -108,20 +90,20 @@ def _health_payload(request_base_url=None):
                 "trading_base_url": alpaca.get("trading_base_url"),
             },
             "options_flow": {
-                "enabled": bool(flow.get("enabled", True)),
-                "ready": bool(flow.get("enabled", True) and flow_auth_ready and directional_routes_ready),
-                "sold_ready": bool(flow.get("enabled", True) and flow_auth_ready and sold_routes_ready),
-                "auth_ready": flow_auth_ready,
-                "directional_routes_ready": directional_routes_ready,
-                "sold_routes_ready": sold_routes_ready,
-                "auth_mode": "remember_token" if flow.get("tastytrade_remember_token") else ("password" if flow.get("tastytrade_password") else "missing"),
-                "missing": flow_missing,
-                "sold_missing": sold_missing,
-                "last_scan_completed_at": flow_state.get("last_scan_completed_at"),
-                "last_scan_error": flow_state.get("last_scan_error"),
-                "sold_min_premium": flow.get("sold_min_premium"),
-                "sold_min_seller_share": flow.get("sold_min_seller_share"),
-                "sold_window_seconds": flow.get("sold_window_seconds"),
+                "enabled": False,
+                "ready": False,
+                "sold_ready": False,
+                "auth_ready": False,
+                "directional_routes_ready": False,
+                "sold_routes_ready": False,
+                "auth_mode": "removed",
+                "missing": [],
+                "sold_missing": [],
+                "last_scan_completed_at": None,
+                "last_scan_error": "Tastytrade flow scanner removed",
+                "sold_min_premium": None,
+                "sold_min_seller_share": None,
+                "sold_window_seconds": None,
             },
             "heatmap": {
                 "enabled": bool(heatmap.get("enabled", True)),
@@ -345,24 +327,7 @@ class MonsterHandler(BaseHTTPRequestHandler):
             self._json(500, {"accepted": False, "error": str(exc)})
 
     def _handle_flow_scan(self):
-        flow_cfg = config.get("flow", {})
-
-        scan_secret = flow_cfg.get("scan_secret", "")
-        if scan_secret:
-            from urllib.parse import urlparse, parse_qs
-            qs = parse_qs(urlparse(self.path).query)
-            provided = qs.get("secret", [""])[0]
-            if provided != scan_secret:
-                return self._json(401, {"error": "invalid scan secret"})
-
-        if not flow_cfg.get("enabled", True):
-            return self._json(200, {"ok": False, "reason": "flow scanner disabled"})
-
-        from monster.options_flow import WATCHLIST
-
-        self._json(202, {"accepted": True, "scanning": True, "symbols": len(WATCHLIST)})
-        worker = threading.Thread(target=_run_flow_scan_async, daemon=True)
-        worker.start()
+        return self._json(410, {"ok": False, "reason": "Tastytrade flow scanner removed"})
 
     def _handle_heatmap(self):
         """
@@ -477,8 +442,7 @@ def main():
     if runtime_cfg.get("run_embedded_schedulers"):
         try:
             ensure_news_monitor_running(config)
-            ensure_flow_monitor_running()
-            print("Embedded Render schedulers started")
+            print("Embedded Render news scheduler started")
         except Exception as exc:
             print(f"Embedded scheduler startup warning: {exc}")
 

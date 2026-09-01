@@ -65,6 +65,8 @@ TT_USERNAME = os.getenv("TASTYTRADE_USERNAME", "")
 TT_PASSWORD = os.getenv("TASTYTRADE_PASSWORD", "")
 TT_REMEMBER_TOKEN = os.getenv("TASTYTRADE_REMEMBER_TOKEN", "")
 TT_OTP = os.getenv("TASTYTRADE_OTP", "")
+FLOW_ENABLED = os.getenv("FLOW_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+TASTYTRADE_API_ENABLED = os.getenv("TASTYTRADE_API_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 _BATCH_SIZE = 200
 _STREAM_TIMEOUT_SECONDS = 12
@@ -77,6 +79,9 @@ _TT_USER_AGENT = "gainzalgo/1.0"
 
 
 def run_flow_scan():
+    if not FLOW_ENABLED:
+        logger.warning("Options flow scan skipped: FLOW_ENABLED is false")
+        return []
     try:
         return asyncio.run(_async_scan())
     except RuntimeError as exc:
@@ -238,6 +243,9 @@ async def _create_tastytrade_session(
     remember_me=False,
     two_factor_authentication=None,
 ):
+    if not TASTYTRADE_API_ENABLED:
+        raise RuntimeError("Tastytrade API access disabled; set TASTYTRADE_API_ENABLED=true only after compliance fixes are approved")
+
     body = {
         "login": TT_USERNAME,
         "remember-me": bool(remember_me),

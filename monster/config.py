@@ -59,48 +59,11 @@ def load_config():
         # Uses the same Alpaca keys but hits paper-api.alpaca.markets.
         # Make sure ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets in .env.
         "paper_trading_enabled": os.getenv("PAPER_TRADING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
-        # ── Options Flow Scanner (Tastytrade) ──────────────────────────────────
-        # Scans top-20 symbols for unusual options activity ($1M+ premium).
-        # Calls → FLOW_DISCORD_WEBHOOK_BULL, Puts → FLOW_DISCORD_WEBHOOK_BEAR
-        # Trigger: GET /flow-scan?secret=<FLOW_SCAN_SECRET>
+        # Tastytrade flow scanning has been removed. Keep a disabled shape so
+        # older dashboard/status code can render without reading removed secrets.
         "flow": {
-            "tastytrade_username":  os.getenv("TASTYTRADE_USERNAME", ""),
-            "tastytrade_password":  os.getenv("TASTYTRADE_PASSWORD", ""),
-            "tastytrade_remember_token": os.getenv("TASTYTRADE_REMEMBER_TOKEN", ""),
-            "tastytrade_otp": os.getenv("TASTYTRADE_OTP", ""),
-            "bull_webhook":         os.getenv("FLOW_DISCORD_WEBHOOK_BULL", ""),
-            "bear_webhook":         os.getenv("FLOW_DISCORD_WEBHOOK_BEAR", ""),
-            "sold_calls_webhook":   os.getenv("FLOW_DISCORD_WEBHOOK_SOLD_CALLS", ""),
-            "sold_puts_webhook":    os.getenv("FLOW_DISCORD_WEBHOOK_SOLD_PUTS", ""),
-            "min_premium":          float(os.getenv("FLOW_MIN_PREMIUM", "1000000")),
-            "min_volume":           int(os.getenv("FLOW_MIN_VOLUME", "3000")),
-            "min_dte":              int(os.getenv("FLOW_MIN_DTE", "3")),
-            "max_dte":              int(os.getenv("FLOW_MAX_DTE", "60")),
-            "max_alerts":           int(os.getenv("FLOW_MAX_ALERTS", "8")),
-            "max_alerts_per_symbol": int(os.getenv("FLOW_MAX_ALERTS_PER_SYMBOL", "1")),
-            "daily_max_alerts":     int(os.getenv("FLOW_DAILY_MAX_ALERTS", "8")),
-            "repeat_window_minutes": int(os.getenv("FLOW_REPEAT_WINDOW_MINUTES", "390")),
-            "sold_min_premium":     float(os.getenv("FLOW_SOLD_MIN_PREMIUM", "250000")),
-            "sold_min_seller_share": float(os.getenv("FLOW_SOLD_MIN_SELLER_SHARE", "0.55")),
-            "sold_candidate_limit": int(os.getenv("FLOW_SOLD_CANDIDATE_LIMIT", "40")),
-            "sold_window_seconds":  int(os.getenv("FLOW_SOLD_WINDOW_SECONDS", "30")),
-            "sold_max_alerts":      int(os.getenv("FLOW_SOLD_MAX_ALERTS", "2")),
-            "sold_max_alerts_per_symbol": int(
-                os.getenv("FLOW_SOLD_MAX_ALERTS_PER_SYMBOL", os.getenv("FLOW_MAX_ALERTS_PER_SYMBOL", "1"))
-            ),
-            "sold_daily_max_alerts": int(os.getenv("FLOW_SOLD_DAILY_MAX_ALERTS", "12")),
-            "sold_repeat_window_minutes": int(
-                os.getenv("FLOW_SOLD_REPEAT_WINDOW_MINUTES", os.getenv("FLOW_REPEAT_WINDOW_MINUTES", "390"))
-            ),
-            "sold_symbol_repeat_window_minutes": int(
-                os.getenv(
-                    "FLOW_SOLD_SYMBOL_REPEAT_WINDOW_MINUTES",
-                    os.getenv("FLOW_SYMBOL_REPEAT_WINDOW_MINUTES", "90"),
-                )
-            ),
-            "scan_secret":          os.getenv("FLOW_SCAN_SECRET", ""),
-            "scan_interval_seconds": int(os.getenv("FLOW_SCAN_INTERVAL_SECONDS", "120")),
-            "enabled":              os.getenv("FLOW_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+            "enabled": False,
+            "removed": True,
         },
         "news": {
             "enabled": os.getenv("NEWS_RADAR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
