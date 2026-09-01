@@ -61,6 +61,16 @@ def _flow_state_snapshot():
     return payload if isinstance(payload, dict) else {}
 
 
+def _flow_can_run(flow):
+    return bool(
+        flow
+        and flow.get("enabled", False)
+        and flow.get("tastytrade_api_enabled", False)
+        and flow.get("client_secret")
+        and flow.get("refresh_token")
+    )
+
+
 def _health_payload(request_base_url=None):
     styles = config.get("styles") or {}
     alpaca = config.get("alpaca") or {}
@@ -68,12 +78,7 @@ def _health_payload(request_base_url=None):
     heatmap = config.get("heatmap") or {}
     news = config.get("news") or {}
     flow_enabled = bool(flow.get("enabled", False))
-    flow_auth_ready = bool(
-        flow_enabled
-        and flow.get("tastytrade_api_enabled", False)
-        and flow.get("client_secret")
-        and flow.get("refresh_token")
-    )
+    flow_auth_ready = _flow_can_run(flow)
     directional_routes_ready = bool(flow.get("bull_webhook") and flow.get("bear_webhook"))
     sold_routes_ready = bool(flow.get("sold_calls_webhook") and flow.get("sold_puts_webhook"))
     flow_state = _flow_state_snapshot()
@@ -190,7 +195,7 @@ def _flow_monitor_loop():
 
     while True:
         try:
-            if (config.get("flow") or {}).get("enabled", False) and _is_flow_market_hours():
+            if _flow_can_run(config.get("flow") or {}) and _is_flow_market_hours():
                 _run_flow_scan_async()
         except Exception as exc:
             logging.getLogger(__name__).error(f"Embedded flow monitor error: {exc}")
@@ -486,7 +491,7 @@ def main():
     if runtime_cfg.get("run_embedded_schedulers"):
         try:
             ensure_news_monitor_running(config)
-            if (config.get("flow") or {}).get("enabled", False):
+            if _flow_can_run(config.get("flow") or {}):
                 ensure_flow_monitor_running()
             print("Embedded Render schedulers started")
         except Exception as exc:
